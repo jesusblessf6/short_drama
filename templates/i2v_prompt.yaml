@@ -1,0 +1,23 @@
+# 图生视频提示词模板（5段式）
+
+# 模板变量:
+#   {shot_description}  - 镜头描述
+#   {camera_movement}   - 镜头运动: 固定/缓慢推进/缓慢拉远/平移
+#   {subject_action}    - 主体行为（动态）
+#   {background_change} - 背景变化
+#   {environment_change} - 环境变化
+
+template: "{shot_description}，{camera_movement}，{subject_action}，{background_change}，{environment_change}"
+
+# 示例
+example: >-
+  中景固定镜头，缓慢推进，商三官手指拨动琴弦微微低头，
+  烛火随气流轻晃，窗外夜色深沉
+
+# 铁律
+rules:
+  - "描述动态，不能是静态描述"
+  - "镜头运动用'缓慢'，避免快速运动"
+  - "主体行为简单，一镜一事"
+  - "先静后动，少量慢移动"
+  - "避免复杂动作（打斗/跳跃/舞蹈）"

@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# 环境与密钥（绝不入库）
+.env
+.env.*
+*.key
+secrets.*
+
+# OS
+.DS_Store
+
+# 本地编辑器/工具设置
+.claude/
+.idea/
+.vscode/

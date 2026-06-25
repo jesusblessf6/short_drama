@@ -1,0 +1,52 @@
+# 状态文件模板
+# 每集一份，由 state.py 自动生成，此文件仅作参考
+
+episode: ep01
+episode_num: 1
+act: 第一幕_灭门
+updated_at: "2026-06-20T21:00:00"
+
+script:
+  status: pending        # pending | drafting | reviewing | approved | rejected
+  file: null
+  attempts: 0
+  cost_tokens: 0
+
+storyboard:
+  status: pending
+  file: null
+  attempts: 0
+  cost_tokens: 0
+  shot_count: 0
+
+shots: []
+# shots 示例:
+# - id: ep01_shot01
+#   scene: "商府内堂"
+#   text2img:
+#     status: pending    # pending | generating | qa_pass | qa_fail | approved | escalated
+#     file: null
+#     prompt_file: null
+#     attempts: 0
+#     cost: 0.0
+#   img2video:
+#     status: pending
+#     file: null
+#     prompt_file: null
+#     attempts: 0
+#     cost: 0.0
+#     qa_notes: null
+#     last_attempt: null
+
+audio:
+  status: pending
+  file: null
+
+composite:
+  status: pending
+  file: null
+
+director_review:
+  status: pending
+  result: null
+  notes: null

@@ -1,0 +1,41 @@
+# 项目配置模板
+# 复制此文件到新项目目录下，修改为实际值
+
+name: 项目名
+source_work: 原著作品名
+source_author: 原著作者
+source_dynasty: 朝代
+episodes: 80
+episode_duration: "1.5-2min"
+aspect_ratio: "9:16"
+
+paths:
+  framework: 01_框架/整体框架.md
+  characters: 02_人物/
+  scripts: 03_剧本/
+  storyboards: 04_分镜/
+  art: 05_美术/
+  audio: 06_音频/
+  output: 07_成片/
+  qa: 08_质检/
+  logs: 09_制作日志/
+  state: .state/
+  reference: reference/
+
+acts:
+  - name: 第一幕
+    episodes: [1, 20]
+  - name: 第二幕
+    episodes: [21, 40]
+  - name: 第三幕
+    episodes: [41, 60]
+  - name: 第四幕
+    episodes: [61, 80]
+
+production:
+  shots_per_episode: 15-20
+  max_retry:
+    text2img: 5
+    img2video_simple: 5
+    img2video_complex: 8
+    lip_sync: 3

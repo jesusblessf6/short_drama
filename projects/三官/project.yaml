@@ -1,0 +1,41 @@
+name: 三官
+source_work: 聊斋志异·商三官
+source_author: 蒲松龄
+source_dynasty: 清
+episodes: 80
+episode_duration: "1.5-2min"
+aspect_ratio: "9:16"
+
+paths:
+  framework: 01_框架/整体框架.md
+  characters: 02_人物/
+  scripts: 03_剧本/
+  storyboards: 04_分镜/
+  art: 05_美术/
+  audio: 06_音频/
+  output: 07_成片/
+  qa: 08_质检/
+  logs: 09_制作日志/
+  state: .state/
+  reference: reference/
+
+acts:
+  - name: 第一幕_灭门
+    episodes: [1, 12]
+  - name: 第二幕_潜入
+    episodes: [13, 35]
+  - name: 第三幕_对决
+    episodes: [36, 60]
+  - name: 第四幕_代价
+    episodes: [61, 80]
+
+production:
+  shots_per_episode: 15-20
+  max_retry:
+    text2img: 5
+    img2video_simple: 5
+    img2video_complex: 8
+    lip_sync: 3
+  # 协作模式:每环节 auto(自动) | review(人审)。未列出的默认 auto。
+  stage_modes:
+    director: review

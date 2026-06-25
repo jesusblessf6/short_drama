@@ -1,0 +1,29 @@
+[project]
+name = "drama"
+version = "0.1.0"
+description = "AI 短剧工厂 — 全自动 AI 短剧制作系统"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.30",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+    "pillow>=10.0",
+    "rich>=13.0",
+    "edge-tts>=6.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+drama = "drama.orchestrator:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["drama*"]

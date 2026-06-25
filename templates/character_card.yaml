@@ -1,0 +1,47 @@
+# 角色描述卡模板
+# 每个角色一份，存在 02_人物/ 目录下
+# 用于文生图提示词的角色一致性锚定
+
+角色ID: {character_id}
+姓名: {name}
+性别: {gender}
+年龄: {age}
+
+# 面部特征（文生图提示词中必须完整重复）
+面部:
+  脸型: {face_shape}        # 鹅蛋脸/方脸/圆脸
+  眉毛: {eyebrows}          # 细长眉/剑眉/柳叶眉
+  眼睛: {eyes}              # 杏眼/凤眼/丹凤眼
+  鼻子: {nose}              # 鼻梁挺直/小巧
+  嘴唇: {lips}              # 薄唇/厚唇
+  标志特征: {distinguishing_features}  # 如：左眉尾一颗小痣
+
+# 发型
+发型:
+  女装: {hair_female}       # 长发高髻银簪
+  男装: {hair_male}         # 束冠黑巾
+
+# 服装
+服装:
+  女装: {clothing_female}   # 月白襦裙淡青披帛
+  男装: {clothing_male}     # 靛蓝圆领袍黑色革带
+
+# 体型
+体型: {body_type}           # 纤瘦/健壮/中等
+身高: {height}              # 165cm
+
+# 性格关键词（影响表情和姿态）
+性格: {personality}         # 沉稳寡言/活泼开朗
+
+# 角色弧线
+弧线:
+  起点: {arc_start}         # 温暖少女
+  中段: {arc_middle}        # 隐忍伪装
+  终点: {arc_end}           # 决绝复仇
+
+# 参考图（生成后填入）
+参考图:
+  正面: {ref_front}
+  侧面: {ref_side}
+  3/4角度: {ref_3q}
+  背面: {ref_back}

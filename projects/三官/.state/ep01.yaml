@@ -1,0 +1,99 @@
+episode: ep01
+episode_num: 1
+act: 第一幕_灭门
+updated_at: '2026-06-22T01:13:17.758191'
+script:
+  status: approved
+  file: 03_剧本/第一幕_灭门/ep01.md
+  attempts: 1
+  cost_tokens: 0
+storyboard:
+  status: approved
+  file: 04_分镜/第一幕_灭门/ep01_storyboard.md
+  attempts: 1
+  cost_tokens: 0
+  shot_count: 3
+shots:
+- id: ep01_shot01
+  scene: 商府内堂
+  type: simple
+  dialogue: 父亲，女儿一定为您讨回公道。
+  speaker: 商三官
+  duration: 4
+  text2img:
+    status: approved
+    file: 05_美术/shots/ep01_shot01.png
+    prompt: 中景，商三官（鹅蛋脸细长眉左眉尾小痣月白襦裙），跪于父亲灵前，烛光摇曳的内堂，悲恸压抑，古风写实工笔，暖黄烛光侧光
+    negative_prompt: 毁容，面部扭曲，肢体变形，多余手指，模糊
+    prompt_file: null
+    attempts: 1
+    cost: 0.0
+  img2video:
+    status: approved
+    file: 05_美术/shots/ep01_shot01.mp4
+    prompt: 中景固定镜头，缓慢推进，商三官低头攥拳，烛火轻晃，背景幽暗
+    prompt_file: null
+    attempts: 1
+    cost: 0.0
+    qa_notes: null
+    last_attempt: null
+- id: ep01_shot02
+  scene: 庭院夜色
+  type: static
+  dialogue: （画外）三官，活下去，比什么都重要。
+  speaker: 商士禹
+  duration: 4
+  text2img:
+    status: approved
+    file: 05_美术/shots/ep01_shot02.png
+    prompt: 全景，商三官（月白襦裙）独立庭中，青砖庭院明月当空，孤寂决绝，古风写实，冷青月光
+    negative_prompt: 毁容，面部扭曲，肢体变形，多余手指，模糊
+    prompt_file: null
+    attempts: 1
+    cost: 0.0
+  img2video:
+    status: approved
+    file: 05_美术/shots/ep01_shot02.mp4
+    prompt: 全景固定镜头，极缓推进，三官抬头望月，云影掠过明月
+    prompt_file: null
+    attempts: 1
+    cost: 0.0
+    qa_notes: null
+    last_attempt: null
+- id: ep01_shot03
+  scene: 灵堂火盆
+  type: simple
+  dialogue: 赵世豪，这笔账，我记下了。
+  speaker: 商三官
+  duration: 4
+  text2img:
+    status: approved
+    file: 05_美术/shots/ep01_shot03.png
+    prompt: 特写，商三官（细长眉眼尾微翘）手持长发立于火盆前，火光映面，决绝，古风写实，暖橙火光
+    negative_prompt: 毁容，面部扭曲，肢体变形，多余手指，模糊
+    prompt_file: null
+    attempts: 1
+    cost: 0.0
+  img2video:
+    status: approved
+    file: 05_美术/shots/ep01_shot03.mp4
+    prompt: 特写固定镜头，缓慢推进，三官松手长发落入火盆，火星升腾
+    prompt_file: null
+    attempts: 1
+    cost: 0.0
+    qa_notes: null
+    last_attempt: null
+audio:
+  status: approved
+  file: 06_音频/ep01.wav
+composite:
+  status: approved
+  file: 07_成片/ep01.mp4
+director_review:
+  status: approved
+  result: approved
+  notes: 通过
+cost_summary:
+  llm_tokens: 0
+  api_calls: 8
+  cost_cny: 0.0

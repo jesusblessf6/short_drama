@@ -1,0 +1,71 @@
+# AI 短剧工厂 — 全局配置
+# 与具体项目无关，所有项目共用
+
+llm:
+  provider: volcengine
+  base_url: "https://ark.cn-beijing.volces.com/api/coding/v3"
+  api_key: "${ARK_CODING_API_KEY}"
+  model: "glm-latest"
+  vision_model: "glm-4v"
+  max_tokens: 4096
+  temperature: 0.7
+  offline: false        # true 或 api_key 为空时，创意层走离线模板（零外部 key 可跑）
+  price_per_1k_tokens: 0.002   # ¥/千token（混合估算），用于把 token 折算成钱
+
+# 成本监测与偏离预警（基线为估算：成本占比用行业共识，token 占比用本项目架构估算）
+cost_monitor:
+  enabled: true
+  deviation_threshold: 0.5     # 实际占比相对基线偏离超 ±50% 即预警
+  baseline_cost_share:         # 各环节成本占比（行业共识：视频 >> 图 >> LLM）
+    img2video: 0.77
+    text2img: 0.19
+    llm: 0.04
+  baseline_token_share:        # LLM 各环节 token 占比（架构 §7 估算）
+    storyboard: 0.41
+    writer: 0.29
+    visual_qa: 0.21
+    director: 0.10
+
+apis:
+  text2img:
+    provider: placeholder   # placeholder=本地占位图；接通后改 jimeng
+    api_key: "${JIMENG_API_KEY}"
+    model: "jimeng-3.0-pro"
+    cost_per_call: 0.5
+  img2video:
+    provider: placeholder   # placeholder=ffmpeg 静帧转 mp4；接通后改 kling
+    api_key: "${KLING_API_KEY}"
+    model: "kling-2.1"
+    cost_per_call: 2.0
+  audio:
+    provider: edge_tts
+    voice: "zh-CN-XiaoxiaoNeural"
+
+orchestrator:
+  parallel_episodes: 2
+  parallel_shots: 3
+  tick_interval: 10
+  state_dir: ".state"
+
+notify:
+  telegram:
+    bot_token: "${TELEGRAM_BOT_TOKEN}"
+    chat_id: "${TELEGRAM_CHAT_ID}"
+  # hermes_api_url: "http://localhost:7777"
+
+corpus:
+  dir: "corpus"
+  sources:
+    - name: 聊斋志异
+      url: "https://ctext.org/liaozhai-zhiyi"
+    - name: 阅微草堂笔记
+      url: "https://ctext.org/yuewei-caotang-biji"
+    - name: 搜神记
+      url: "https://ctext.org/soushenji"
+    - name: 子不语
+      url: "https://ctext.org/zibuyu"
+
+ffmpeg:
+  path: "ffmpeg"
+  default_codec: "libx264"
+  default_crf: 23
