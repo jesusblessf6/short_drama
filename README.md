@@ -8,6 +8,9 @@
 # 安装依赖
 pip install -e .
 
+# 运行测试（离线回归：不访问任何付费/外部服务，全部在临时目录隔离运行）
+python -m pytest tests/ -v
+
 # 配置环境变量
 export ARK_CODING_API_KEY="your-key"
 export JIMENG_API_KEY="your-key"

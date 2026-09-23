@@ -106,6 +106,7 @@ short_drama/
 - [x] 5 个 Prompt、模板、三官最小素材（`02_人物/` 角色卡、`05_美术/风格定调/`）
 - [x] 人审环节（轻量聊天式）：`review.py`（`ReviewChannel`/`FileReviewChannel` + 规则意图解析，LLM 可升级）；`project.yaml` 的 `production.stage_modes` 配 `auto|review`；`director` 终审支持 review 模式（→ `reviewing` 挂起 → `--review-reply` 提交 → 续跑）；`--reset-review` 复活被打回的集。回复通道可插拔（Telegram 留插槽）
 - [x] 成本记账与偏离预警：token→¥ 折算（`llm.price_per_1k_tokens`）、per-episode `cost_summary` 写回 state、`cost_monitor` 基线对比预警
+- [x] M0 测试基线（2026-09-24）：`tests/` 47 例——离线端到端/断点续跑/阶段过滤/人审批准与打回/重试升级/全镜头失败安全降级/config/state/review 单元测试。全部在 tmp 隔离项目运行，**零外部服务**（LLM 离线模板、placeholder 视觉、audio 静音轨），绝不触碰 `projects/三官`。CI：`.github/workflows/ci.yml`（py3.11/3.12 + ffmpeg）
 
 ### B. 占位/未接真实外部服务
 
@@ -123,7 +124,7 @@ short_drama/
 4. **sourcing 实现** — ctext.org 抓取
 5. **视频帧提取** — visual_qa 真实视频质检
 6. **compose 完善** — 字幕/转场/调色；即梦 TTS
-7. **整集失败终态** — 全 i2v 升级时 compose 0 片段会触发停滞中止，可加显式"整集失败"状态
+7. **整集失败终态** — 全 i2v 升级时 compose 0 片段会触发停滞中止，可加显式"整集失败"状态（下限行为已有回归测试锁定：`tests/test_retry_escalation.py::TestAllShotsFail`——终止、不误报完成、不产出成片）
 
 ## 开发约定
 

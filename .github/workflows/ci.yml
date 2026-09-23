@@ -1,0 +1,32 @@
+# M0 基础 CI — 离线测试回归
+# 原则：测试不访问任何付费/外部服务（LLM 离线模板、placeholder provider、
+# audio 静音降级），ffmpeg 由系统包安装。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install package (依赖检查)
+        run: pip install -e ".[dev]"
+
+      - name: Run offline regression tests
+        run: python -m pytest tests/ -v --tb=short
