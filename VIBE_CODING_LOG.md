@@ -6,6 +6,35 @@
 
 ---
 
+## 2026-09-25 — 落实 M0/M1 评审意见：P2×2 + P3×2 全清（测试 87 例）
+
+**User Prompt:** "看看评审意见"（评审会话产物 `REVIEW-M0M1.md`：六项声明属实，P2×2/P3×2/nano×2）。
+
+**Done:** 逐条核实后全部落实（测试 81→87 例）：
+- **P2-1**：`_run_loop` no-action 分支新增 `elif self._budget_notified` → 发"⏸ 预算耗尽挂起"，不再发假"✅ 全部完成"；测试断言通知文本（`test_budget_block_never_sends_fake_success`，monkeypatch notifier 收集消息）。
+- **P2-2**：`_placeholder_approved` 闸门补查 audio 链（`degraded=true` 或 `source in (None, silent_fallback)`）——堵住"demo 真实 provider 试跑→切 production 成片静音"的漏网路径；补 3 例（静音链拦/旧态无 source 拦/全真实不误伤）。
+- **P3-1**：main() 中 `--init/--init-episode/--review-reply/--reset-review/--reset-episode` 五个写状态子命令纳入 ProjectLock 互斥（run 自身已锁；--status 只读不放）；子进程 e2e 测试：持锁 → reset 拒执行且状态未变 → 释放 → 成功。
+- **P3-2**：`reset_interrupted` 返回变更标志，主循环仅变更时 save；`test_state.py` 旧契约断言同步更新。
+- nano×2 按评审意见不改（fsync 父目录可接受；retry 装饰器预留待 M2 兑现）。
+
+**Why:** 评审指出的共同盲区是"测试断言了状态层、没断言用户可见语义"——P2-1 的测试因此直接盯通知文本而非状态；P3-1 锁的入口放 main()（reset_* 本身无锁语义，进程退出即释放 flock，不留死锁）。
+
+**Next:** M2 前置（非本轮问题，重申）：刷新 `references/模型选型_2026-06.md`；真实异步 API 接入时配轮询间隔。等待用户 M2 输入（key/预算上限/画风）。
+
+---
+
+## 2026-09-25 — 评审 M0/M1 代码提交（新开代码评审轮，评审意见落 REVIEW-M0M1.md）
+
+**User Prompt:** "评审一下新的提交"。
+
+**Done:** 识别新提交为代码（非行业文档）：`bc4219c`（M0 测试基线+CI）、`fe789e3`（CLAUDE.md）、`3eaa4ce`（M1，重点）。通读 M1 全部改动源码（orchestrator/state/config/retry/project_lock/executors）+ 测试断言抽查；本机实跑全套 **81 passed/23.7s**；磁盘核查三官 ep01 重置状态。评审意见落 `REVIEW-M0M1.md`（新文件，不混历史快照 REVIEW.md）。结论：六项声明全部属实、架构上"单一决策路径"贯彻得好；发现 **P2×2**——①预算阻断下发假"✅ 全部完成"通知（状态没错、通知语义假成功，测试只断言了状态）；②`_placeholder_approved` 闸门只查 shots 不查 audio 静音降级链（demo 真实 provider 试跑→切 production 的文档化工作流会漏网）——加 P3×2（CLI 子命令绕锁、每 tick 无差别重写状态）+ nano×2。
+
+**Why:** 两个 P2 的共同点是"测试断言了状态、没断言用户可见语义"（通知文本/闸门覆盖面）——M1 测试在状态层很扎实，但出口消息和防线下游（audio）是盲区。评审轮次与对象切换时显式开新文档（代码评审与行业文档评审分离），沿用上轮约定。
+
+**Next:** P2×2 建议 M2 前顺手清（各一条测试）；P3 与 M2 批次合并；M2 前置仍需刷新模型选型文档 + 配置轮询间隔。
+
+---
+
 ## 2026-09-25 — M1 全量落地：真实调用与恢复能力（六项全完成，测试 81 例）
 
 **User Prompt:** "本会话是开发会话" → "按计划继续吧"（按 `DEVELOPMENT_PLAN.md` M1 执行）。

@@ -30,7 +30,7 @@ short_drama/
 ├── config.yaml              ← 全局配置（API keys、模型、并行度）
 ├── pyproject.toml
 ├── .github/workflows/ci.yml ← CI（py3.11/3.12 + ffmpeg，离线测试）
-├── tests/                   ← 离线回归（81 例 = M0 基线 47 + M1 34；隔离 tmp 项目、零外部服务）
+├── tests/                   ← 离线回归（87 例 = M0 基线 47 + M1 40；隔离 tmp 项目、零外部服务）
 │
 ├── drama/                   ← 系统核心包
 │   ├── config.py            配置加载（Config + ProjectConfig + mode/budget 校验）
@@ -126,7 +126,8 @@ short_drama/
   - **外部任务恢复框架**：派发前落 `generating`+输入指纹；executor 可返回 `{submitted: True, external_task_id}` 表示异步在途（不算失败不耗 attempts）；中断重启后 `generating`+task_id → 下轮轮询恢复而非重复提交付费任务（真实异步 provider M2 接入时兑现）
   - **三级预算**：`config.yaml` 的 `budget.per_shot/episode/project_cny`；plan 期 + 派发期双重检查（防批内超支）；镜头级超额 → 升级终态，集/项目级超额 → 停止新付费任务挂起等预算（不误判失败）
   - **整集失败终态**：全镜头终态但 0 可合成片段 → `composite/director_review=failed` 显式报错（取代旧的停滞中止，不误报完成）
-  - **占位 approved 死局解除**：production 启动拦截"approved 但产物占位链"的集并提示作废；`--reset-episode` 整集作废（cost_summary 保留防反复烧钱）；**三官 ep01 已实际作废重置**（磁盘占位文件未动）
+  - **占位 approved 死局解除**：production 启动拦截"approved 但产物来自占位/静音降级链"（镜头 source 占位 + audio degraded/silent_fallback，评审 P2-2）的集并提示作废；`--reset-episode` 整集作废（cost_summary 保留防反复烧钱）；**三官 ep01 已实际作废重置**（磁盘占位文件未动）
+  - **评审 P2×2/P3×2 落实（REVIEW-M0M1.md，2026-09-25）**：预算耗尽挂起改发"⏸"通知不发假"✅ 完成"（P2-1）；写状态 CLI 子命令（--init/--review-reply/--reset-*）纳入运行锁互斥（P3-1）；`reset_interrupted` 返回变更标志、无变化不落盘（P3-2）
 
 ### B. 占位/未接真实外部服务
 

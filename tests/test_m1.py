@@ -132,6 +132,25 @@ class TestDegradedAudio:
 
 
 class TestPlaceholderApprovedGuard:
+    def _approved_ep(self, orch, *, t2i_source="jimeng", i2v_source="kling",
+                     audio_source="edge_tts", audio_degraded=False):
+        """构造一集 director approved 的状态，sources 可调"""
+        state = new_episode_state(1, "幕")
+        sh = new_shot_state("ep01_shot01")
+        sh["text2img"].update(status="approved", file="a.png", source=t2i_source)
+        sh["img2video"].update(status="approved", file="a.mp4", source=i2v_source)
+        state["shots"].append(sh)
+        state["audio"].update(status="approved", file="ep01.wav",
+                              source=audio_source, degraded=audio_degraded)
+        state["composite"].update(status="approved", file="ep01.mp4",
+                                  source="ffmpeg")
+        state["director_review"]["status"] = "approved"
+        orch.state_mgr.save("ep01", state)
+        return state
+
+    def _stale(self, orch):
+        return orch._placeholder_approved(orch.state_mgr.load_all(), None)
+
     def test_production_blocks_placeholder_approved_episode(
             self, tmp_path, offline_audio):
         """正式模式启动拦截：approved 集若产物来自占位链（试点死局）→ 拒跑并提示作废"""
@@ -161,6 +180,26 @@ class TestPlaceholderApprovedGuard:
         assert orch.reset_episode("ep01") is True
         stale = orch._placeholder_approved(orch.state_mgr.load_all(), "ep01")
         assert stale == []
+
+    def test_gate_catches_silent_audio_chain(self, tmp_path):
+        """评审 P2-2：真实镜头 + 静音降级 audio → 闸门必须拦截（demo→production 漏网路径）"""
+        orch, _ = make_orchestrator(tmp_path)
+        self._approved_ep(orch, audio_source="silent_fallback", audio_degraded=True)
+        assert self._stale(orch) == ["ep01"]
+
+    def test_gate_catches_legacy_audio_without_source(self, tmp_path):
+        """旧状态 audio 无 source 字段：视为未知来源，拦截"""
+        orch, _ = make_orchestrator(tmp_path)
+        st = self._approved_ep(orch)
+        st["audio"]["source"] = None
+        orch.state_mgr.save("ep01", st)
+        assert self._stale(orch) == ["ep01"]
+
+    def test_gate_passes_fully_real_chain(self, tmp_path):
+        """真实镜头 + 真实配音：不拦（闸门不误伤）"""
+        orch, _ = make_orchestrator(tmp_path)
+        self._approved_ep(orch, audio_source="edge_tts", audio_degraded=False)
+        assert self._stale(orch) == []
 
 
 # ---------- 状态扩展 ----------
@@ -227,6 +266,23 @@ class TestStateSchema:
         s["shots"].append(sh2)
         mgr.reset_interrupted(s)
         assert s["shots"][0]["img2video"]["status"] == "generating"
+        assert s["shots"][1]["text2img"]["status"] == "pending"
+
+    def test_reset_interrupted_returns_change_flag(self, tmp_path):
+        """评审 P3-2：无变更返回 False（调用方跳过落盘），有变更返回 True 且就地修改"""
+        mgr = StateManager(tmp_path / "state")
+        s = new_episode_state(1, "幕")
+        sh = new_shot_state("ep01_shot01")
+        sh["text2img"]["status"] = "approved"       # 干净状态
+        sh["img2video"]["status"] = "generating"
+        sh["img2video"]["external_task_id"] = "t1"  # 在途：不算变更
+        s["shots"].append(sh)
+        assert mgr.reset_interrupted(s) is False
+
+        sh2 = new_shot_state("ep01_shot02")
+        sh2["text2img"]["status"] = "generating"    # 无 ID 的 generating → pending
+        s["shots"].append(sh2)
+        assert mgr.reset_interrupted(s) is True
         assert s["shots"][1]["text2img"]["status"] == "pending"
 
     def test_reset_episode_clears_but_keeps_cost(self, tmp_path):
@@ -417,6 +473,37 @@ class TestProjectLock:
         lock.release()
         ProjectLock(tmp_path / ".lock").acquire()   # 不抛即通过
 
+    def test_cli_state_commands_respect_lock(self, tmp_path):
+        """评审 P3-1：调度器持锁期间，写状态的 CLI 子命令拒绝执行（防并发写状态）"""
+        from conftest import make_global_config, make_project
+        from test_cli import _cli
+
+        root = make_project(tmp_path)
+        cfg = make_global_config(tmp_path)
+        assert _cli("--init-episode", "ep01", config_path=cfg,
+                    project_root=root).returncode == 0
+
+        # 标记一个可观察状态，验证持锁期间 reset 未执行
+        state_path = root / ".state" / "ep01.yaml"
+        state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+        state["script"]["status"] = "approved"
+        state_path.write_text(yaml.dump(state, allow_unicode=True), encoding="utf-8")
+
+        lock = ProjectLock(root / ".state" / ".lock")
+        lock.acquire()
+        try:
+            r = _cli("--reset-episode", "ep01", config_path=cfg, project_root=root)
+            assert r.returncode == 0 and "运行中" in r.stdout
+            assert yaml.safe_load(state_path.read_text(encoding="utf-8"))[
+                "script"]["status"] == "approved"   # 未被重置
+        finally:
+            lock.release()
+
+        r = _cli("--reset-episode", "ep01", config_path=cfg, project_root=root)
+        assert "已整集作废重置" in r.stdout
+        assert yaml.safe_load(state_path.read_text(encoding="utf-8"))[
+            "script"]["status"] == "pending"
+
 
 # ---------- 三级预算 ----------
 
@@ -472,6 +559,28 @@ class TestBudgetGate:
         state, sh = self._state_with_shot(t2i_cost=10.0, ep_spent=15.0)
         act = orch._plan_shot_action("ep01", state, sh, {"img2video_simple": 5})
         assert act.type == "executor" and act.name == "img2video"
+
+    def test_budget_block_never_sends_fake_success(self, tmp_path, monkeypatch):
+        """评审 P2-1：预算耗尽挂起时，绝不能发"✅ 全部完成"假成功通知"""
+        from drama.executors.text2img import Text2ImgExecutor
+
+        orch = self._setup(tmp_path, per_episode=25.0)
+        sent = []
+        monkeypatch.setattr(orch.notifier, "send", lambda msg: sent.append(msg))
+        orig = Text2ImgExecutor.run
+
+        def paid(self, task):
+            result = orig(self, task)
+            result["cost"] = 10.0
+            return result
+
+        monkeypatch.setattr(Text2ImgExecutor, "run", paid)
+        orch.init_states("ep01")
+        orch.run(episode_filter="ep01")
+
+        assert any("预算" in m for m in sent), f"应发预算挂起通知: {sent}"
+        assert not any("全部完成" in m for m in sent), \
+            f"挂起状态不得发假成功通知: {sent}"
 
     def test_budget_exhaustion_stops_new_paid_tasks(self, tmp_path, monkeypatch):
         """e2e：集预算耗尽 → 不再提交付费任务，镜头停在 pending（非升级终态），运行收敛"""

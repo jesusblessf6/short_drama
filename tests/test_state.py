@@ -78,7 +78,10 @@ class TestStateManager:
 
 class TestResetInterrupted:
     def test_generating_reset_to_pending(self, mgr):
-        """断点续跑核心：进程中断遗留的 generating/drafting 必须重置"""
+        """断点续跑核心：进程中断遗留的 generating/drafting 必须重置。
+
+        M1 起 reset_interrupted 返回变更标志（bool，True=有修改），修改就地生效。
+        """
         state = new_episode_state(1, "幕")
         shot = new_shot_state("ep01_shot01")
         shot["text2img"]["status"] = "generating"
@@ -89,12 +92,13 @@ class TestResetInterrupted:
 
         mgr.save("ep01", state)
         reloaded = mgr.load("ep01")
-        out = mgr.reset_interrupted(reloaded)
+        changed = mgr.reset_interrupted(reloaded)
 
-        assert out["script"]["status"] == "pending"
-        assert out["storyboard"]["status"] == "pending"
-        assert out["shots"][0]["text2img"]["status"] == "pending"
-        assert out["shots"][0]["img2video"]["status"] == "pending"
+        assert changed is True
+        assert reloaded["script"]["status"] == "pending"
+        assert reloaded["storyboard"]["status"] == "pending"
+        assert reloaded["shots"][0]["text2img"]["status"] == "pending"
+        assert reloaded["shots"][0]["img2video"]["status"] == "pending"
 
 
 class TestShotSurfacing:

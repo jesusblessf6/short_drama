@@ -259,19 +259,22 @@ class StateManager:
             return False
         return all(s["img2video"]["status"] == "approved" for s in shots)
 
-    def reset_interrupted(self, state: dict) -> dict:
-        """重置中断的任务。
+    def reset_interrupted(self, state: dict) -> bool:
+        """重置中断的任务。返回是否有变更（无变更时调用方可跳过落盘）。
 
         generating 且无 external_task_id → pending（本地占位/未及提交，可安全重跑）；
         generating 且有 external_task_id → 保持原状：外部付费任务可能在途，
         盲目重置会导致重复提交重复扣费——恢复时凭 ID 先轮询核对。
         """
+        changed = False
         for shot in state.get("shots", []):
             for sub in ("text2img", "img2video"):
                 st = shot[sub]
                 if st["status"] == "generating" and not st.get("external_task_id"):
                     st["status"] = "pending"
+                    changed = True
         for task in ["script", "storyboard"]:
             if state[task]["status"] == "drafting":
                 state[task]["status"] = "pending"
-        return state
+                changed = True
+        return changed

@@ -175,9 +175,10 @@ class Orchestrator:
         while True:
             states = self.state_mgr.load_all()
             # 重置中断任务（generating/drafting → pending；有外部任务ID的保持待轮询）
+            # 仅在有变更时落盘（评审 P3-2：无差别重写使 updated_at 漂移、无谓 IO）
             for state in states:
-                self.state_mgr.reset_interrupted(state)
-                self.state_mgr.save(state["episode"], state)
+                if self.state_mgr.reset_interrupted(state):
+                    self.state_mgr.save(state["episode"], state)
 
             actions = self.plan_actions(states, episode_filter, stage_filter)
             if not actions:
@@ -199,6 +200,13 @@ class Orchestrator:
                     logger.info(f"❌ 整集失败终态: {failed}（无可合成片段/正式模式拒绝降级）"
                                 f"— 排查后 `--reset-episode <ep>` 重做")
                     self.notifier.send(f"❌ {', '.join(failed)} 整集失败，需人工排查")
+                elif self._budget_notified:
+                    # 预算耗尽挂起：有镜头停在 pending 但不再提交付费任务——
+                    # 这不是完成，绝不能发"✅ 全部完成"（评审 P2-1）
+                    logger.info(f"⏸ 预算耗尽挂起（{len(self._budget_notified)} 处阻断）"
+                                f"— 调整 config.yaml budget 后重跑")
+                    self.notifier.send("⏸ 预算耗尽，已挂起不提交新付费任务"
+                                       "— 调整 budget 后重跑")
                 else:
                     logger.info("所有任务完成")
                     self.notifier.send(f"✅ 项目 '{self.project.name}' 当前可执行任务已全部完成")
@@ -221,10 +229,13 @@ class Orchestrator:
 
     def _placeholder_approved(self, states: list[dict],
                               episode_filter: str | None) -> list[str]:
-        """正式模式启动检查：approved 集的产物是否来自占位链。
+        """正式模式启动检查：approved 集的产物是否来自占位/降级链。
 
-        占位链判定：任一镜头的 t2i/i2v 产物来源缺失或为 placeholder
-        （M1 之前的旧状态无 source 字段，视为占位——历史上从未接过真实服务）。
+        占位链判定（评审 P2-2 扩展）：
+        - 任一镜头的 t2i/i2v 产物来源缺失或为 placeholder（M1 之前的旧状态无
+          source 字段，视为占位——历史上从未接过真实服务）；
+        - 或 audio 走了静音降级（degraded=true / source 为空或 silent_fallback）
+          ——demo 真实 provider 试跑→切 production 时，成片静音的漏网路径。
         这样的集被调度器永久跳过（approved），正式投产即死局，须显式作废。
         """
         stale = []
@@ -239,7 +250,10 @@ class Orchestrator:
                 for shot in s.get("shots", [])
                 for sub in ("text2img", "img2video")
             )
-            if placeholder_chain:
+            audio = s.get("audio", {})
+            silent_chain = (audio.get("degraded") is True
+                            or audio.get("source") in (None, "silent_fallback"))
+            if placeholder_chain or silent_chain:
                 stale.append(ep)
         return stale
 
@@ -907,6 +921,16 @@ def main():
     config = Config.from_yaml(args.config)
     project = ProjectConfig.from_yaml(Path(args.project) / "project.yaml")
     orch = Orchestrator(config, project)
+
+    # 写状态的子命令与调度器互斥（评审 P3-1）：调度器持锁期间拒绝执行，
+    # 防止并发写同一状态文件竞态。run() 自行加锁；--status 只读不加锁。
+    if any([args.init, args.init_episode, args.review_reply,
+            args.reset_review, args.reset_episode]):
+        try:
+            ProjectLock(orch.state_mgr.state_dir / ".lock").acquire()
+        except RuntimeError as e:
+            print(f"错误: {e}")
+            return
 
     if args.init or args.init_episode:
         orch.init_states(args.init_episode)
