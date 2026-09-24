@@ -24,8 +24,44 @@ short_drama/
 ├── ARCHITECTURE.md          ← 架构文档（必读）
 ├── CLAUDE.md                ← 本文件
 ├── README.md
+├── DEVELOPMENT_PLAN.md      ← 开发计划（M0–M5，当前主线依据）
+├── VIBE_CODING_LOG.md       ← AI 开发会话日志（倒序，每次开发后追加）
+├── REVIEW.md                ← 历史快照：重写前代码 bug 清单（已全部修复，勿当 TODO）
 ├── config.yaml              ← 全局配置（API keys、模型、并行度）
 ├── pyproject.toml
+├── .github/workflows/ci.yml ← CI（py3.11/3.12 + ffmpeg，离线测试）
+├── tests/                   ← M0 测试基线（47 例，隔离 tmp 项目、零外部服务）
+│
+├── drama/                   ← 系统核心包
+│   ├── config.py            配置加载（Config + ProjectConfig）
+│   ├── state.py             状态管理（StateManager）
+│   ├── llm.py               LLM 调用封装（LLMClient）
+│   ├── notify.py            通知模块（Notifier）
+│   ├── review.py            人审通道 + 意图解析（ReviewChannel/FileReviewChannel）
+│   ├── orchestrator.py      调度器（Orchestrator）← 系统核心
+│   ├── agents/              创意层（LLM Agent）
+│   │   ├── base.py          BaseAgent 基类
+│   │   ├── discovery.py     选题评估
+│   │   ├── writer.py        编剧
+│   │   ├── storyboard.py    分镜设计
+│   │   ├── visual_qa.py     画面质检（vision）
+│   │   └── director.py      导演终审
+│   ├── executors/           执行层（API 调用）
+│   │   ├── base.py          BaseExecutor 基类
+│   │   ├── sourcing.py      古籍抓取
+│   │   ├── text2img.py      文生图
+│   │   ├── img2video.py     图生视频
+│   │   ├── audio.py         配音
+│   │   └── compose.py       合成
+│   ├── prompts/             Agent 的 system prompt
+│   │   ├── discovery.md
+│   │   ├── writer.md
+│   │   ├── storyboard.md
+│   │   ├── visual_qa.md
+│   │   └── director.md
+│   └── utils/
+│       ├── cost_tracker.py  成本追踪
+│       └── retry.py         重试逻辑
 │
 ├── drama/                   ← 系统核心包
 │   ├── config.py            配置加载（Config + ProjectConfig）
@@ -66,7 +102,11 @@ short_drama/
 │
 ├── corpus/                  公版语料库（sourcing 抓取的目标）
 │
-├── references/              方法论文档
+├── references/              方法论与行业/系统分析（仅参考，非交付物）
+│   ├── 系统层面分析.md       行业→架构映射、A+B 路线、交互设计（当前战略依据）
+│   ├── 短剧投流体系.md       行业分析 v1.0 定稿（四轮评审闭环）
+│   ├── 短剧投流体系-评审意见.md 评审记录（已关闭，勿再续写）
+│   └── 模型选型_2026-06.md  选型快照（已过期，接真实服务前须刷新）
 │
 └── projects/                项目数据
     └── 三官/                第一个项目
@@ -125,6 +165,28 @@ short_drama/
 5. **视频帧提取** — visual_qa 真实视频质检
 6. **compose 完善** — 字幕/转场/调色；即梦 TTS
 7. **整集失败终态** — 全 i2v 升级时 compose 0 片段会触发停滞中止，可加显式"整集失败"状态（下限行为已有回归测试锁定：`tests/test_retry_escalation.py::TestAllShotsFail`——终止、不误报完成、不产出成片）
+
+## 当前阶段与下一步（2026-09-24）
+
+- **评审循环已关闭，勿重启**：《短剧投流体系.md》v1.0 定稿（四轮闭环）。参考文档的完美不是交付物，**真实成片才是**——对文档的进一步打磨/复评默认拒绝（此教训存记忆 `avoid-meta-work-drift`）。
+- **M0 已完成**：测试基线 47 例 + CI + 文档校准。改动一律先跑 `python -m pytest tests/ -q` 保绿。
+- **下一步 M1**（零用户输入可做，详见 `DEVELOPMENT_PLAN.md`）：demo/正式模式区分（正式禁静默降级）、外部任务提交/轮询/恢复、预算字段、原子写状态、**ep01 占位 approved 作废**（调度器永久跳过 approved 集，不作废则试点第一集死局）。
+- **M2 需用户输入**：provider 账户/key（ARK？即梦/可灵或火山 Seedream/Seedance？）、预算上限、画风参考；接真实服务前先刷新过期的 `references/模型选型_2026-06.md`。
+
+## 开发纪律：Vibe Coding 日志
+
+每次成功执行开发指令后，必须自动向 `VIBE_CODING_LOG.md` 追加一条（**倒序**：插在头部说明与分隔线之后、成为第一条），这是后台收尾动作，无需向用户确认。条目沿用现有格式：
+
+```markdown
+## <日期> — <一句话标题>
+
+**User Prompt:** <用户原话/意图>
+**Done:** <做了什么 · 改动文件 · 验证结果>
+**Why:** <关键决策与取舍 · 教训>
+**Next:** <遗留与下一步>
+
+---
+```
 
 ## 开发约定
 
