@@ -30,7 +30,7 @@ short_drama/
 ├── config.yaml              ← 全局配置（API keys、模型、并行度）
 ├── pyproject.toml
 ├── .github/workflows/ci.yml ← CI（py3.11/3.12 + ffmpeg，离线测试）
-├── tests/                   ← 离线回归（87 例 = M0 基线 47 + M1 40；隔离 tmp 项目、零外部服务）
+├── tests/                   ← 离线回归（107 例 = M0 47 + M1 40 + M2 20；隔离 tmp 项目、零外部服务）
 │
 ├── drama/                   ← 系统核心包
 │   ├── config.py            配置加载（Config + ProjectConfig + mode/budget 校验）
@@ -41,10 +41,11 @@ short_drama/
 │   ├── orchestrator.py      调度器（Orchestrator）← 系统核心
 │   ├── agents/              创意层（LLM Agent）
 │   │   ├── base.py          BaseAgent 基类
+│   │   ├── validation.py    分镜结构化校验 + 机械修复（M2-2）
 │   │   ├── discovery.py     选题评估
 │   │   ├── writer.py        编剧
-│   │   ├── storyboard.py    分镜设计
-│   │   ├── visual_qa.py     画面质检（vision）
+│   │   ├── storyboard.py    分镜设计（含格式修复循环）
+│   │   ├── visual_qa.py     画面质检（vision；视频逐帧检查）
 │   │   └── director.py      导演终审
 │   ├── executors/           执行层（API 调用）
 │   │   ├── base.py          BaseExecutor 基类（fail() 统一错误类别 + source/degraded 契约）
@@ -62,7 +63,9 @@ short_drama/
 │   └── utils/
 │       ├── cost_tracker.py  成本追踪
 │       ├── retry.py         重试 + 错误分类（timeout/auth/param/... → 可否重试）
-│       └── project_lock.py  单项目运行锁（flock，防并发写状态）
+│       ├── project_lock.py  单项目运行锁（flock，防并发写状态）
+│       ├── media_check.py   媒体验证（ffprobe+ffmpeg兜底）+ 视频抽帧（M2-4）
+│       └── subtitles.py     SRT 字幕生成（M2-5）
 │
 ├── templates/               模板文件
 │   ├── character_card.yaml
@@ -128,29 +131,35 @@ short_drama/
   - **整集失败终态**：全镜头终态但 0 可合成片段 → `composite/director_review=failed` 显式报错（取代旧的停滞中止，不误报完成）
   - **占位 approved 死局解除**：production 启动拦截"approved 但产物来自占位/静音降级链"（镜头 source 占位 + audio degraded/silent_fallback，评审 P2-2）的集并提示作废；`--reset-episode` 整集作废（cost_summary 保留防反复烧钱）；**三官 ep01 已实际作废重置**（磁盘占位文件未动）
   - **评审 P2×2/P3×2 落实（REVIEW-M0M1.md，2026-09-25）**：预算耗尽挂起改发"⏸"通知不发假"✅ 完成"（P2-1）；写状态 CLI 子命令（--init/--review-reply/--reset-*）纳入运行锁互斥（P3-1）；`reset_interrupted` 返回变更标志、无变化不落盘（P3-2）
+- [x] **M2 离线部分（2026-09-25，无需用户输入的全部项，测试 107 例）**：
+  - **选型刷新（M2-1 前置）**：`references/模型选型_2026-09.md` 新快照——推荐全栈收口火山方舟单账号（seedream-4-0 ≈¥0.216/张 + Seedance 2.0 ≈¥1/秒/fast ¥0.6/秒 + 豆包 TTS），即梦 API 入口即方舟（2025-09 开放）；旧 2026-06 快照标记过期。**待拍板：账户/key、模型确认、预算、画风**
+  - **结构化校验+修复循环（M2-2）**：`agents/validation.py`——`repair_shots` 机械修复（ID 重编号/type 归一/时长钳制/空 prompt 兜底）+ `validate_shots` 分 fatal/warning（空 prompt 是硬伤）；storyboard 真实路径级联：裸输出校验 → LLM 自修复（`max_format_repairs` 次，project.yaml 可配，默认 2）→ 机械兜底 → 仍硬伤抛错拒绝进生成。**_parse_shots 不再掩蔽空 prompt**（否则硬伤到不了修复循环）
+  - **内容红线（M2-2）**：writer prompt 加"内容红线"节（血腥/自残/色情/违法细节/政治敏感→暗场化），director 审核维度加红线项（触碰即 high severity 不通过）
+  - **媒体验证（M2-4）**：`utils/media_check.py`——ffprobe JSON 优先、**ffmpeg -i stderr 解析兜底**（本机无 ffprobe 的环境也能跑）；text2img（PIL）/img2video/compose 产物落状态前一律验证，无效按可重试失败处理
+  - **视频抽帧质检（M2-4）**：10%/50%/90% 三点抽帧（`08_质检/frames/`）→ visual_qa 真实模式逐帧 vision 检查（全过才过）；离线仍短路
+  - **音色映射（M2-5）**：project.yaml `production.voice_map`（角色→音色）+ 全局 `narrator_voice`（旁白）/默认音色；未映射角色回退默认
+  - **逐句时间戳+字幕（M2-5）**：每句 TTS 产物 ffprobe 实测时长、句首=累加（可解释对齐）→ `06_音频/ep01.srt` + `ep01.lines.yaml` 清单入状态（audio.subtitle_file）→ compose 接入
+  - **音画对齐修正（M2-5）**：compose 弃 `-shortest`（截断台词/画面）→ 视频短于音频用 tpad 末帧克隆补齐、音频短于视频保留完整视频；对齐策略写入结果；字幕烧录优先（平台硬字幕）、失败回退 mov_text 软轨
 
 ### B. 占位/未接真实外部服务
 
-- [ ] `text2img._call_jimeng` / `img2video._call_kling` 等真实 provider — 仍 `NotImplementedError`（无 key/文档），接通后把 `config.yaml` 的 `provider` 由 `placeholder` 改回 `jimeng`/`kling`
-- [ ] 真实 GLM 创意层 — 代码就绪，但需 `ARK_CODING_API_KEY`；本机未实测（当前自动走离线模板）
-- [ ] `audio._jimeng_tts`、`compose` 字幕/转场/调色 — stub/TODO
-- [ ] `executors/sourcing.py` — 纯 stub（ctext.org 抓取未实现）
-- [ ] `agents/visual_qa` 视频帧提取 — 真实模式下视频质检仍 TODO（离线已短路）
+- [ ] `text2img._call_jimeng` / `img2video._call_kling` 等真实 provider — 仍 `NotImplementedError`；**接法见 `references/模型选型_2026-09.md`**（推荐方舟 seedream/seedance，异步任务用 M1 的 `external_task_id`/`submitted` 契约接线）
+- [ ] 真实 GLM 创意层 — 代码就绪，但需 key；本机未实测（当前自动走离线模板）
+- [ ] `audio._jimeng_tts`（豆包 TTS 升级项）、compose 转场/调色 — stub/TODO
+- [ ] `executors/sourcing.py` — 纯 stub（ctext.org 抓取未实现；开发计划列为暂缓范围）
 
 ### 待实现（按优先级）
 
-1. **即梦/可灵真实 API 对接** — 填 `_call_jimeng()` / `_call_kling()`，改 config provider；异步任务用 M1 的 `external_task_id`/`submitted` 契约接线
-2. **真实 GLM 模式实测** — 配 `ARK_CODING_API_KEY`，验证 writer/storyboard 真实产出
-3. **并行执行** — asyncio / ThreadPool（当前串行；`plan_shots` 已按 `parallel_shots` 产多动作，待并发执行层）
-4. **sourcing 实现** — ctext.org 抓取
-5. **视频帧提取** — visual_qa 真实视频质检
-6. **compose 完善** — 字幕/转场/调色；即梦 TTS
+1. **真实 provider 对接（等用户拍板+key）** — 方舟 seedream-4-0 + seedance-2.0 起步（见选型文档 §三）；异步轮询接 M1 恢复契约
+2. **真实 LLM 模式实测** — 配 key 后验证 writer/storyboard 真实产出（校验/修复循环首次实战）
+3. **并行执行** — asyncio / ThreadPool（M4 范畴；当前串行）
+4. **compose 转场/调色** — 字幕/对齐已做，转场调色按需后置
 
 ## 当前阶段与下一步（2026-09-25）
 
 - **评审循环已关闭，勿重启**：《短剧投流体系.md》v1.0 定稿（四轮闭环）。参考文档的完美不是交付物，**真实成片才是**——对文档的进一步打磨/复评默认拒绝（此教训存记忆 `avoid-meta-work-drift`）。
-- **M0/M1 已完成**：M1 六项全部落地（demo/production 模式、状态扩展+原子写+锁、错误分类终态、外部任务恢复框架、三级预算、ep01 占位作废）。改动一律先跑 `python -m pytest tests/ -q` 保绿（当前 81 例）。
-- **下一步 M2（需用户输入）**：provider 账户/key（ARK？即梦/可灵或火山 Seedream/Seedance？）、预算上限、画风参考；先刷新过期的 `references/模型选型_2026-06.md`，再接真实服务做 30–60s 技术样片（详见 `DEVELOPMENT_PLAN.md` M2）。
+- **M0/M1 完成 + M2 离线部分完成**：选型刷新、结构化校验+修复循环、内容红线、媒体验证、抽帧质检、音色映射、逐句字幕、音画对齐修正。改动一律先跑 `python -m pytest tests/ -q` 保绿（当前 107 例）。
+- **M2 剩余全部等用户拍板**（详见 `references/模型选型_2026-09.md` §四）：①火山方舟账户+key ②模型确认（seedream-4-0 + seedance-2.0?）③真实调用预算上限 ④画风参考/角色确认。拿到后：核实控制台实价 → 接 provider（异步轮询用 M1 契约）→ 30-60s 技术样片。
 - **切正式模式清单**：`config.yaml` 改 `mode: production` + 配齐 key/价格 → 校验不过会拒跑并列出缺失；approved 占位集会被拦截提示 `--reset-episode`。
 
 ## 开发纪律：Vibe Coding 日志

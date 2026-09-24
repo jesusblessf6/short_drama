@@ -54,20 +54,39 @@ class VisualQAAgent(BaseAgent):
 
         # 判断是图片还是视频
         path = Path(file_path)
-        if path.suffix in (".png", ".jpg", ".jpeg", ".webp"):
+        if path.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
             response = self.llm.chat_with_image(messages, file_path)
-        elif path.suffix in (".mp4", ".webm", ".gif"):
-            # 视频质检：取第一帧截图
-            # TODO: 实现视频帧提取
-            logger.warning("视频质检暂未实现帧提取，跳过")
-            return {"pass": True, "notes": "视频质检未实现，默认通过"}
-        else:
-            logger.warning(f"不支持的文件格式: {path.suffix}")
-            return {"pass": False, "notes": f"不支持的格式: {path.suffix}"}
+            result = self.parse_output(response, context)
+            result["cost_tokens"] = self.llm.last_usage
+            return result
+        if path.suffix.lower() in (".mp4", ".webm", ".mov", ".gif"):
+            return self._qa_video(context, messages)
+        logger.warning(f"不支持的文件格式: {path.suffix}")
+        return {"pass": False, "notes": f"不支持的格式: {path.suffix}"}
 
-        result = self.parse_output(response, context)
-        result["cost_tokens"] = self.llm.last_usage
-        return result
+    def _qa_video(self, context: dict, messages: list[dict]) -> dict:
+        """视频质检：逐帧 vision 检查（帧由调度器按 10%/50%/90% 抽取）。
+
+        聚合规则：所有帧通过才算通过（抽帧质检仅辅助，运动连续性仍靠人看整段）。
+        无帧（抽帧失败）默认通过，避免卡死——与离线短路同一保守取向。
+        """
+        frames = context.get("frames") or []
+        if not frames:
+            logger.warning("视频质检无抽帧，默认通过")
+            return {"pass": True, "notes": "视频质检无抽帧，默认通过"}
+
+        notes = []
+        total_tokens = 0
+        passed = True
+        for i, frame in enumerate(frames):
+            response = self.llm.chat_with_image(messages, frame)
+            res = self.parse_output(response, context)
+            total_tokens += self.llm.last_usage
+            frame_pass = bool(res.get("pass", True))
+            passed = passed and frame_pass
+            notes.append(f"帧{i + 1}: {'通过' if frame_pass else res.get('notes', '不合格')}")
+        return {"pass": passed, "notes": " | ".join(notes),
+                "cost_tokens": total_tokens}
 
     def parse_output(self, response: str, context: dict) -> dict:
         try:

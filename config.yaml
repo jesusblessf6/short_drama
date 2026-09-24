@@ -54,7 +54,8 @@ apis:
     cost_per_call: 2.0
   audio:
     provider: edge_tts
-    voice: "zh-CN-XiaoxiaoNeural"
+    voice: "zh-CN-XiaoxiaoNeural"       # 未映射角色的默认音色
+    narrator_voice: "zh-CN-YunxiNeural" # 旁白音色（角色映射在 project.yaml production.voice_map）
 
 orchestrator:
   parallel_episodes: 2

@@ -40,6 +40,10 @@ class Img2VideoExecutor(BaseExecutor):
         if provider == "placeholder":
             try:
                 self._call_placeholder(image_path, output_path, duration)
+                ok, reason = self._verify(output_path)
+                if not ok:
+                    return {"success": False, "error": f"占位视频无效: {reason}",
+                            "error_class": "unknown", "attempts": 1}
                 return {"success": True, "file": str(output_path),
                         "cost": 0.0, "attempts": 1, "source": "placeholder"}
             except Exception as e:
@@ -59,6 +63,11 @@ class Img2VideoExecutor(BaseExecutor):
 
             if video_data:
                 output_path.write_bytes(video_data)
+                ok, reason = self._verify(output_path)
+                if not ok:
+                    # 下载/写入产物损坏：按可重试失败处理（重新生成而非直接 approved）
+                    return {"success": False, "error": f"生成文件无效: {reason}",
+                            "error_class": "unknown", "attempts": 1}
                 return {
                     "success": True,
                     "file": str(output_path),
@@ -73,6 +82,12 @@ class Img2VideoExecutor(BaseExecutor):
         except Exception as e:
             logger.error(f"图生视频失败: {e}")
             return self.fail(e, attempts=1)
+
+    def _verify(self, output_path: Path) -> tuple[bool, str]:
+        """产物有效性验证（M2-4）：有视频流且时长达标（ffprobe 缺失时 ffmpeg 兜底）"""
+        from ..utils.media_check import validate_video
+        return validate_video(output_path, self.config.ffmpeg.ffprobe_path,
+                              ffmpeg=self.config.ffmpeg.path)
 
     def _call_kling(self, image_path: Path, prompt: str, config) -> bytes:
         """调用可灵 API"""

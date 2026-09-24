@@ -118,7 +118,8 @@ def offline_audio(monkeypatch):
     """把 edge_tts 打桩为失败 → AudioExecutor 走 ffmpeg 静音轨降级。
 
     保证测试确定性：不联网、不依赖 edge-tts 服务可用性。
+    签名对齐 M2-5 的 _edge_tts(self, lines, output_path, config, voice_map) -> (bool, timings)。
     """
     from drama.executors.audio import AudioExecutor
     monkeypatch.setattr(AudioExecutor, "_edge_tts",
-                        lambda self, lines, out, cfg: False)
+                        lambda self, lines, out, cfg, voice_map: (False, []))

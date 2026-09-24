@@ -39,3 +39,7 @@ production:
   # 协作模式:每环节 auto(自动) | review(人审)。未列出的默认 auto。
   stage_modes:
     director: review
+  # 角色→音色映射（M2-5）：旁白走全局 narrator_voice；未映射角色走全局默认音色
+  voice_map:
+    商三官: "zh-CN-XiaoxiaoNeural"
+    商士禹: "zh-CN-YunyangNeural"

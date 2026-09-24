@@ -59,6 +59,7 @@ class APIConfig:
 class AudioConfig:
     provider: str
     voice: str
+    narrator_voice: str = "zh-CN-YunxiNeural"
 
 
 @dataclass
@@ -79,6 +80,7 @@ class NotifyConfig:
 @dataclass
 class FFmpegConfig:
     path: str = "ffmpeg"
+    ffprobe_path: str = "ffprobe"
     default_codec: str = "libx264"
     default_crf: int = 23
 

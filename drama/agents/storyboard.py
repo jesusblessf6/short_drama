@@ -8,12 +8,70 @@ import re
 from pathlib import Path
 
 from .base import BaseAgent
+from .validation import character_names, repair_shots, validate_shots
 
 logger = logging.getLogger(__name__)
 
 
 class StoryboardAgent(BaseAgent):
     system_prompt_file = "storyboard.md"
+
+    def run(self, context: dict) -> dict:
+        """重写 run：真实路径带"结构化校验 + 格式修复循环"（M2-2）。
+
+        级联：裸输出校验（空 prompt 视为硬伤，不做掩蔽）→ 有硬伤且未达上限时
+        把错误清单喂回 LLM 自修复 → 达上限后机械修复兜底（repair_shots）→
+        仍硬伤则抛错，绝不带病进入付费生成。离线模板输出同样过校验作保险。
+        """
+        if self.config.llm.is_offline:
+            result = self.offline_output(context)
+            result.setdefault("cost_tokens", 0)
+            result["shots"] = repair_shots(result["shots"],
+                                           context["state"]["episode"])
+            fatal, _ = validate_shots(result["shots"])
+            if fatal:
+                raise ValueError(f"离线分镜模板输出存在硬伤: {fatal}")
+            return result
+
+        project = context["project"]
+        state = context["state"]
+        episode = state["episode"]
+        max_repairs = int(project.production.get("max_format_repairs", 2))
+        characters = character_names(project)
+        messages = self.build_messages(context)
+
+        for attempt in range(max_repairs + 1):
+            response = self.llm.chat(messages)
+            result = self.parse_output(response, context)
+            fatal, warns = validate_shots(result["shots"], characters)
+            for w in warns:
+                logger.warning(f"[{episode}] 分镜校验警告: {w}")
+            if not fatal:
+                result["shots"] = repair_shots(result["shots"], episode)
+                result["cost_tokens"] = self.llm.last_usage
+                return result
+            if attempt < max_repairs:
+                logger.warning(
+                    f"[{episode}] 分镜格式问题（第{attempt + 1}次修复）: {fatal}")
+                messages = messages + [
+                    {"role": "assistant", "content": response},
+                    {"role": "user", "content":
+                        "你上次的分镜输出存在以下格式问题，请修正后重新输出**完整**分镜"
+                        "（保持原有格式要求，不要解释）：\n"
+                        + "\n".join(f"- {e}" for e in fatal)},
+                ]
+
+        # 修复次数耗尽：机械修复做最后兜底（能救则救），仍硬伤才拒绝
+        repaired = repair_shots(result["shots"], episode)
+        fatal2, _ = validate_shots(repaired, characters)
+        if fatal2:
+            raise ValueError(
+                f"{episode} 分镜格式修复 {max_repairs} 次后仍有硬伤，"
+                f"拒绝进入生成: {fatal2}")
+        logger.warning(f"[{episode}] 格式修复次数耗尽，机械修复兜底通过")
+        result["shots"] = repaired
+        result["cost_tokens"] = self.llm.last_usage
+        return result
 
     def build_messages(self, context: dict) -> list[dict]:
         project = context["project"]
@@ -96,6 +154,8 @@ class StoryboardAgent(BaseAgent):
             scene = field("场景")
             t2i = field("文生图Prompt") or field("文生图")
             i2v = field("图生视频Prompt") or field("图生视频")
+            # 注意：prompt 缺失不做掩蔽兜底（裸值交给校验/修复循环处理，
+            # 否则 LLM 的格式硬伤永远到不了修复循环）
             neg = field("负面提示词") or self.NEGATIVE_DEFAULT
             speaker, dialogue = self._split_speaker(field("台词"))
             jingbie = field("景别")
@@ -104,8 +164,8 @@ class StoryboardAgent(BaseAgent):
                 "id": f"{episode}_shot{i:02d}",
                 "scene": scene or "场景",
                 "type": shot_type,
-                "t2i_prompt": t2i or f"{jingbie or '中景'}，{scene}",
-                "i2v_prompt": i2v or f"{jingbie or '中景'}固定镜头，缓慢推进",
+                "t2i_prompt": t2i,
+                "i2v_prompt": i2v,
                 "negative_prompt": neg,
                 "dialogue": dialogue,
                 "speaker": speaker,

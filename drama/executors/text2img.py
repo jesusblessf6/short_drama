@@ -49,6 +49,10 @@ class Text2ImgExecutor(BaseExecutor):
             try:
                 self._call_placeholder(prompt, task.get("shot_id", ""),
                                        task.get("scene", ""), output_path)
+                ok, reason = self._verify(output_path)
+                if not ok:
+                    return {"success": False, "error": f"占位图无效: {reason}",
+                            "error_class": "unknown", "attempts": 1}
                 return {"success": True, "file": str(output_path),
                         "cost": 0.0, "attempts": 1, "source": "placeholder"}
             except Exception as e:
@@ -68,6 +72,10 @@ class Text2ImgExecutor(BaseExecutor):
 
             if image_data:
                 output_path.write_bytes(image_data)
+                ok, reason = self._verify(output_path)
+                if not ok:
+                    return {"success": False, "error": f"生成文件无效: {reason}",
+                            "error_class": "unknown", "attempts": 1}
                 return {
                     "success": True,
                     "file": str(output_path),
@@ -82,6 +90,11 @@ class Text2ImgExecutor(BaseExecutor):
         except Exception as e:
             logger.error(f"文生图失败: {e}")
             return self.fail(e, attempts=1)
+
+    def _verify(self, output_path: Path) -> tuple[bool, str]:
+        """产物有效性验证（M2-4）：PIL 可解码"""
+        from ..utils.media_check import validate_image
+        return validate_image(output_path)
 
     def _call_jimeng(self, prompt: str, negative: str, config) -> bytes:
         """调用即梦 API"""

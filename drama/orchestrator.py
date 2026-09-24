@@ -29,6 +29,9 @@ from .config import Config, ProjectConfig
 from .state import StateManager, new_episode_state, new_shot_state
 from .notify import Notifier
 from .utils.cost_tracker import CostTracker
+from .utils.media_check import (
+    VIDEO_EXTS, extract_frames, frame_timestamps, probe_duration,
+)
 from .utils.project_lock import ProjectLock
 from .utils.retry import is_retryable
 from .review import FileReviewChannel, parse_review_reply, parse_with_llm
@@ -662,7 +665,12 @@ class Orchestrator:
             }
         if name == "audio":
             out = self.project.get_path("audio") / f"{ep}.wav"
-            return {"lines": self._collect_lines(state), "output_path": str(out)}
+            return {
+                "lines": self._collect_lines(state),
+                "output_path": str(out),
+                # 角色→音色映射（M2-5）：project.yaml production.voice_map + 全局旁白音色
+                "voice_map": self.project.production.get("voice_map", {}),
+            }
         if name == "compose":
             clips = [
                 str(root / s["img2video"]["file"])
@@ -670,10 +678,12 @@ class Orchestrator:
                 if s["img2video"]["status"] == "approved" and s["img2video"].get("file")
             ]
             audio_rel = state["audio"].get("file")
+            subtitles_rel = state["audio"].get("subtitle_file")
             out = self.project.get_path("output") / f"{ep}.mp4"
             return {
                 "video_clips": clips,
                 "audio_path": str(root / audio_rel) if audio_rel else None,
+                "subtitles": str(root / subtitles_rel) if subtitles_rel else None,
                 "output_path": str(out),
                 "episode": ep,
             }
@@ -818,19 +828,22 @@ class Orchestrator:
                 degraded = bool(result.get("degraded"))
                 self.cost.record_api("audio", cost)
                 self.state_mgr.add_cost(ep, api_calls=1, cost_cny=cost)
+                subtitle_rel = self._rel(result["subtitles"]) if result.get("subtitles") else None
                 if degraded and self.config.mode == "production":
                     # 正式模式：降级产物（静音轨）不得自动通过 → 整集失败，人工介入
                     self.state_mgr.update_task(
                         ep, "audio", status="failed", degraded=True,
                         source=result.get("source"),
                         file=self._rel(result.get("file")),
+                        subtitle_file=subtitle_rel,
                         error="TTS 降级为静音轨，正式模式拒绝自动通过")
                     self._fail_episode(ep, "audio", "正式模式禁止静音降级")
                 else:
                     self.state_mgr.update_task(
                         ep, "audio", status="approved", degraded=degraded,
                         source=result.get("source"),
-                        file=self._rel(result.get("file")))
+                        file=self._rel(result.get("file")),
+                        subtitle_file=subtitle_rel)
             elif not is_retryable(result.get("error_class", "unknown")):
                 self.state_mgr.update_task(ep, "audio", status="failed",
                                            error=result.get("error"),
@@ -854,13 +867,32 @@ class Orchestrator:
             # 可重试失败：保持 pending 下轮再试（停滞检测兜底）
 
     def _run_visual_qa(self, ep, shot, sub, file_abs) -> bool:
-        """内联画面质检。离线/异常默认通过（避免卡死）。"""
+        """内联画面质检。离线/异常默认通过（避免卡死）。
+
+        M2-4：视频质检先按多时间点抽帧（10%/50%/90%），帧路径随上下文传给
+        visual_qa agent（真实模式逐帧 vision 检查）；抽帧失败不阻断（退化为
+        无帧质检路径，agent 侧显式处理）。
+        """
         if "visual_qa" not in self.agents or not file_abs:
             return True
         ctx = {
             "project": self.project, "episode": ep, "shot": shot,
             "sub_task": sub, "file_path": str(file_abs),
         }
+        if sub == "img2video" and Path(file_abs).suffix.lower() in VIDEO_EXTS:
+            try:
+                dur = probe_duration(file_abs, self.config.ffmpeg.ffprobe_path,
+                                     self.config.ffmpeg.path) or 4.0
+                frames = extract_frames(
+                    file_abs,
+                    self.project.get_path("qa") / "frames" / ep,
+                    frame_timestamps(dur),
+                    self.config.ffmpeg.path,
+                )
+                ctx["frames"] = [str(f) for f in frames]
+                logger.info(f"[{ep}] {shot['id']} 视频质检抽帧 {len(frames)} 张")
+            except Exception as e:
+                logger.warning(f"视频抽帧失败（QA 无帧路径）: {e}")
         try:
             res = self.agents["visual_qa"].run(ctx)
             tokens = res.get("cost_tokens", 0)

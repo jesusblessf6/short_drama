@@ -6,6 +6,27 @@
 
 ---
 
+## 2026-09-25 — M2 无需拍板部分全量落地：选型刷新+校验修复+媒体验证+抽帧+音色+字幕+对齐（测试 107 例）
+
+**User Prompt:** "现在按照计划开发吧。无需拍板的需求都做掉。"（中途中断两次，"重试重试"/"重试"续跑）。
+
+**Done:** M2 中不依赖用户输入的全部工作（M0 47 + M1 40 + M2 20 = 107 例全绿）：
+- **选型刷新（M2-1 前置）**：web 调研后写 `references/模型选型_2026-09.md`——关键发现：即梦 API 已开放且入口就是火山方舟（2025-09），故推荐全栈收口方舟单账号（seedream-4-0 ≈¥0.216/张、Seedance 2.0 ≈¥1/秒、豆包 TTS ≈¥1.3/千字），单集生成成本预估 ≈¥55-90；旧 2026-06 快照标记过期。仅产推荐，拍板项（账户/模型/预算/画风）列清单等用户。
+- **结构化校验+修复循环（M2-2）**：新 `agents/validation.py`（repair_shots 机械修复 + validate_shots fatal/warning 分级）；storyboard run() 重写为级联：裸输出校验→LLM 自修复（max_format_repairs，默认 2）→机械兜底→仍硬伤抛错。**关键教训：_parse_shots 原本自己掩蔽空 prompt，校验永远看不到硬伤、修复循环成死代码——掩蔽兜底必须从解析层移除，交给修复级联**。
+- **内容红线（M2-2）**：writer prompt 加红线节（血腥/自残/色情/违法细节→暗场化叙事），director 审核维度加红线项（开发计划 M2-2 的合规前置措施）。
+- **媒体验证（M2-4）**：新 `utils/media_check.py`。**本机根因排障：/Users/wing/env/ffmpeg 只有单个 ffmpeg 二进制、无 ffprobe → 新验证一接入就把全部占位视频判死（9 例挂）**。解法：resolve_ffprobe（配置→ffmpeg 同目录→PATH）+ `ffmpeg -i` stderr 解析兜底，CI（apt ffmpeg 有 ffprobe）与本机两路都通。
+- **视频抽帧质检（M2-4）**：10%/50%/90% 三点抽帧到 `08_质检/frames/`；visual_qa 真实模式逐帧 vision 检查、全过才过；调度器 `_run_visual_qa` 组装 frames 上下文；离线仍短路。
+- **音色映射（M2-5）**：project.yaml `production.voice_map`（三官已配商三官/商士禹）+ 全局 narrator_voice；调度器注入 audio task。
+- **逐句时间戳+字幕（M2-5）**：新 `utils/subtitles.py`；audio 逐句 ffprobe 实测时长→累加句首（可解释对齐）→ `ep01.srt`+`ep01.lines.yaml`；audio.subtitle_file 入状态→compose 取用；静音降级同样产字幕（degraded 不变）。
+- **音画对齐修正（M2-5）**：compose 弃 `-shortest`→tpad 末帧克隆补齐（视频<音频）/保留完整视频（音频<视频），对齐策略入结果；字幕烧录优先、缺 libass 回退 mov_text 软轨；compose 产物过 ffprobe 验证。
+- 配套：conftest `_edge_tts` mock 对齐新签名 `(lines, out, cfg, voice_map)->(bool, timings)`；新增 `tests/test_m2.py` 20 例。
+
+**Why:** 三个教训值得记：①"兜底掩蔽"与"校验修复"天然冲突——解析层兜底会让校验失明，容错必须放在修复级联的末端而非解析层；②本机 ffprobe 缺失教会我们：验证逻辑要么自带降级路径，要么第一次接入就会把绿灯全变红灯；③lavfi color 源加 `d=1` 会让源只有 1 秒（-t 拉不长源），测试生成器踩过。
+
+**Next:** M2 剩余全部等用户拍板（选型文档 §四：方舟账户+key、模型确认、预算上限、画风参考）→ 到位后核实控制台实价、接 provider（异步轮询用 M1 契约）、做 30-60s 技术样片。
+
+---
+
 ## 2026-09-25 — 落实 M0/M1 评审意见：P2×2 + P3×2 全清（测试 87 例）
 
 **User Prompt:** "看看评审意见"（评审会话产物 `REVIEW-M0M1.md`：六项声明属实，P2×2/P3×2/nano×2）。
