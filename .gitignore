@@ -19,3 +19,6 @@ secrets.*
 .claude/
 .idea/
 .vscode/
+
+# 运行锁（flock，运行时产物）
+projects/*/.state/.lock

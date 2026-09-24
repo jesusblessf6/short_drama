@@ -30,11 +30,11 @@ short_drama/
 ├── config.yaml              ← 全局配置（API keys、模型、并行度）
 ├── pyproject.toml
 ├── .github/workflows/ci.yml ← CI（py3.11/3.12 + ffmpeg，离线测试）
-├── tests/                   ← M0 测试基线（47 例，隔离 tmp 项目、零外部服务）
+├── tests/                   ← 离线回归（81 例 = M0 基线 47 + M1 34；隔离 tmp 项目、零外部服务）
 │
 ├── drama/                   ← 系统核心包
-│   ├── config.py            配置加载（Config + ProjectConfig）
-│   ├── state.py             状态管理（StateManager）
+│   ├── config.py            配置加载（Config + ProjectConfig + mode/budget 校验）
+│   ├── state.py             状态管理（StateManager：原子写/schema 迁移/failed 终态）
 │   ├── llm.py               LLM 调用封装（LLMClient）
 │   ├── notify.py            通知模块（Notifier）
 │   ├── review.py            人审通道 + 意图解析（ReviewChannel/FileReviewChannel）
@@ -47,7 +47,7 @@ short_drama/
 │   │   ├── visual_qa.py     画面质检（vision）
 │   │   └── director.py      导演终审
 │   ├── executors/           执行层（API 调用）
-│   │   ├── base.py          BaseExecutor 基类
+│   │   ├── base.py          BaseExecutor 基类（fail() 统一错误类别 + source/degraded 契约）
 │   │   ├── sourcing.py      古籍抓取
 │   │   ├── text2img.py      文生图
 │   │   ├── img2video.py     图生视频
@@ -61,37 +61,8 @@ short_drama/
 │   │   └── director.md
 │   └── utils/
 │       ├── cost_tracker.py  成本追踪
-│       └── retry.py         重试逻辑
-│
-├── drama/                   ← 系统核心包
-│   ├── config.py            配置加载（Config + ProjectConfig）
-│   ├── state.py             状态管理（StateManager）
-│   ├── llm.py               LLM 调用封装（LLMClient）
-│   ├── notify.py            通知模块（Notifier）
-│   ├── orchestrator.py      调度器（Orchestrator）← 系统核心
-│   ├── agents/              创意层（LLM Agent）
-│   │   ├── base.py          BaseAgent 基类
-│   │   ├── discovery.py     选题评估
-│   │   ├── writer.py        编剧
-│   │   ├── storyboard.py    分镜设计
-│   │   ├── visual_qa.py     画面质检（vision）
-│   │   └── director.py      导演终审
-│   ├── executors/           执行层（API 调用）
-│   │   ├── base.py          BaseExecutor 基类
-│   │   ├── sourcing.py      古籍抓取
-│   │   ├── text2img.py      文生图
-│   │   ├── img2video.py     图生视频
-│   │   ├── audio.py         配音
-│   │   └── compose.py       合成
-│   ├── prompts/             Agent 的 system prompt
-│   │   ├── discovery.md
-│   │   ├── writer.md
-│   │   ├── storyboard.md
-│   │   ├── visual_qa.md
-│   │   └── director.md
-│   └── utils/
-│       ├── cost_tracker.py  成本追踪
-│       └── retry.py         重试逻辑
+│       ├── retry.py         重试 + 错误分类（timeout/auth/param/... → 可否重试）
+│       └── project_lock.py  单项目运行锁（flock，防并发写状态）
 │
 ├── templates/               模板文件
 │   ├── character_card.yaml
@@ -121,7 +92,7 @@ short_drama/
         ├── 08_质检/
         ├── 09_制作日志/
         ├── reference/
-        └── .state/          状态文件（每集一个 YAML）
+        └── .state/          状态文件（每集一个 YAML；ep01 占位 approved 已于 M1 作废重置）
 ```
 
 ## 三层架构
@@ -147,6 +118,15 @@ short_drama/
 - [x] 人审环节（轻量聊天式）：`review.py`（`ReviewChannel`/`FileReviewChannel` + 规则意图解析，LLM 可升级）；`project.yaml` 的 `production.stage_modes` 配 `auto|review`；`director` 终审支持 review 模式（→ `reviewing` 挂起 → `--review-reply` 提交 → 续跑）；`--reset-review` 复活被打回的集。回复通道可插拔（Telegram 留插槽）
 - [x] 成本记账与偏离预警：token→¥ 折算（`llm.price_per_1k_tokens`）、per-episode `cost_summary` 写回 state、`cost_monitor` 基线对比预警
 - [x] M0 测试基线（2026-09-24）：`tests/` 47 例——离线端到端/断点续跑/阶段过滤/人审批准与打回/重试升级/全镜头失败安全降级/config/state/review 单元测试。全部在 tmp 隔离项目运行，**零外部服务**（LLM 离线模板、placeholder 视觉、audio 静音轨），绝不触碰 `projects/三官`。CI：`.github/workflows/ci.yml`（py3.11/3.12 + ffmpeg）
+- [x] **M1 全部落地（2026-09-25，81 例测试）**：
+  - **demo/production 双模式**：`config.yaml` 顶层 `mode`。production 启动校验（缺 key/placeholder provider/价格未知 → 拒跑，"未知价格不得记免费"）；静音降级产物 `degraded` 显式标记——demo 放行、production 拒绝自动通过（→ 整集 failed）
+  - **状态扩展**：镜头子任务新增 `source`（产物来源）/`error_class`/`external_task_id`/`input_hash`/`attempts_log`；`migrate_state()` 加载旧 YAML 自动补全（兼容既有数据）；`failed` 进入任务/镜头状态枚举
+  - **原子写 + 运行锁**：`StateManager.save` 走 tmp+`os.replace`+fsync；`utils/project_lock.py` flock 单项目锁（CLI/机器人互斥，拿不到锁立即退出）
+  - **错误分类**：`utils/retry.py::classify_exception`（timeout/rate_limit/network=可重试；auth/param=不可重试直接 failed 终态）；`BaseExecutor.fail()` 统一携带 `error_class`
+  - **外部任务恢复框架**：派发前落 `generating`+输入指纹；executor 可返回 `{submitted: True, external_task_id}` 表示异步在途（不算失败不耗 attempts）；中断重启后 `generating`+task_id → 下轮轮询恢复而非重复提交付费任务（真实异步 provider M2 接入时兑现）
+  - **三级预算**：`config.yaml` 的 `budget.per_shot/episode/project_cny`；plan 期 + 派发期双重检查（防批内超支）；镜头级超额 → 升级终态，集/项目级超额 → 停止新付费任务挂起等预算（不误判失败）
+  - **整集失败终态**：全镜头终态但 0 可合成片段 → `composite/director_review=failed` 显式报错（取代旧的停滞中止，不误报完成）
+  - **占位 approved 死局解除**：production 启动拦截"approved 但产物占位链"的集并提示作废；`--reset-episode` 整集作废（cost_summary 保留防反复烧钱）；**三官 ep01 已实际作废重置**（磁盘占位文件未动）
 
 ### B. 占位/未接真实外部服务
 
@@ -158,20 +138,19 @@ short_drama/
 
 ### 待实现（按优先级）
 
-1. **即梦/可灵真实 API 对接** — 填 `_call_jimeng()` / `_call_kling()`，改 config provider
+1. **即梦/可灵真实 API 对接** — 填 `_call_jimeng()` / `_call_kling()`，改 config provider；异步任务用 M1 的 `external_task_id`/`submitted` 契约接线
 2. **真实 GLM 模式实测** — 配 `ARK_CODING_API_KEY`，验证 writer/storyboard 真实产出
 3. **并行执行** — asyncio / ThreadPool（当前串行；`plan_shots` 已按 `parallel_shots` 产多动作，待并发执行层）
 4. **sourcing 实现** — ctext.org 抓取
 5. **视频帧提取** — visual_qa 真实视频质检
 6. **compose 完善** — 字幕/转场/调色；即梦 TTS
-7. **整集失败终态** — 全 i2v 升级时 compose 0 片段会触发停滞中止，可加显式"整集失败"状态（下限行为已有回归测试锁定：`tests/test_retry_escalation.py::TestAllShotsFail`——终止、不误报完成、不产出成片）
 
-## 当前阶段与下一步（2026-09-24）
+## 当前阶段与下一步（2026-09-25）
 
 - **评审循环已关闭，勿重启**：《短剧投流体系.md》v1.0 定稿（四轮闭环）。参考文档的完美不是交付物，**真实成片才是**——对文档的进一步打磨/复评默认拒绝（此教训存记忆 `avoid-meta-work-drift`）。
-- **M0 已完成**：测试基线 47 例 + CI + 文档校准。改动一律先跑 `python -m pytest tests/ -q` 保绿。
-- **下一步 M1**（零用户输入可做，详见 `DEVELOPMENT_PLAN.md`）：demo/正式模式区分（正式禁静默降级）、外部任务提交/轮询/恢复、预算字段、原子写状态、**ep01 占位 approved 作废**（调度器永久跳过 approved 集，不作废则试点第一集死局）。
-- **M2 需用户输入**：provider 账户/key（ARK？即梦/可灵或火山 Seedream/Seedance？）、预算上限、画风参考；接真实服务前先刷新过期的 `references/模型选型_2026-06.md`。
+- **M0/M1 已完成**：M1 六项全部落地（demo/production 模式、状态扩展+原子写+锁、错误分类终态、外部任务恢复框架、三级预算、ep01 占位作废）。改动一律先跑 `python -m pytest tests/ -q` 保绿（当前 81 例）。
+- **下一步 M2（需用户输入）**：provider 账户/key（ARK？即梦/可灵或火山 Seedream/Seedance？）、预算上限、画风参考；先刷新过期的 `references/模型选型_2026-06.md`，再接真实服务做 30–60s 技术样片（详见 `DEVELOPMENT_PLAN.md` M2）。
+- **切正式模式清单**：`config.yaml` 改 `mode: production` + 配齐 key/价格 → 校验不过会拒跑并列出缺失；approved 占位集会被拦截提示 `--reset-episode`。
 
 ## 开发纪律：Vibe Coding 日志
 
@@ -242,6 +221,8 @@ python -m drama.orchestrator --project projects/三官 --review-reply ep01 direc
 python -m drama.orchestrator --project projects/三官 --review-reply ep01 director "打回 镜头03 手不对"
 # 被打回的集复活（rejected/reviewing → pending）：
 python -m drama.orchestrator --project projects/三官 --reset-review ep01
+# 整集作废重置（环节全回 pending、镜头清空、累计成本保留；占位产物作废用）：
+python -m drama.orchestrator --project projects/三官 --reset-episode ep01
 ```
 
 ## 环境变量

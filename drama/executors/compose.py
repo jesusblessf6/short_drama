@@ -53,11 +53,12 @@ class ComposeExecutor(BaseExecutor):
                 "success": True,
                 "file": str(output_path),
                 "cost": 0.0,
+                "source": "ffmpeg",
             }
 
         except Exception as e:
             logger.error(f"合成失败: {e}")
-            return {"success": False, "error": str(e)}
+            return self.fail(e)
 
     def _concat_videos(self, clips: list[Path], output: Path, ffmpeg: str) -> None:
         """拼接视频片段"""

@@ -41,10 +41,10 @@ class Img2VideoExecutor(BaseExecutor):
             try:
                 self._call_placeholder(image_path, output_path, duration)
                 return {"success": True, "file": str(output_path),
-                        "cost": 0.0, "attempts": 1}
+                        "cost": 0.0, "attempts": 1, "source": "placeholder"}
             except Exception as e:
                 logger.error(f"占位视频生成失败: {e}")
-                return {"success": False, "error": str(e), "attempts": 1}
+                return self.fail(e, attempts=1)
 
         try:
             if provider == "kling":
@@ -54,7 +54,8 @@ class Img2VideoExecutor(BaseExecutor):
             elif provider == "runway":
                 video_data = self._call_runway(image_path, prompt, api_config)
             else:
-                return {"success": False, "error": f"不支持的 provider: {provider}"}
+                return {"success": False, "error": f"不支持的 provider: {provider}",
+                        "error_class": "param"}
 
             if video_data:
                 output_path.write_bytes(video_data)
@@ -63,13 +64,15 @@ class Img2VideoExecutor(BaseExecutor):
                     "file": str(output_path),
                     "cost": api_config.cost_per_call,
                     "attempts": 1,
+                    "source": provider,
                 }
             else:
-                return {"success": False, "error": "生成返回空数据"}
+                return {"success": False, "error": "生成返回空数据",
+                        "error_class": "unknown"}
 
         except Exception as e:
             logger.error(f"图生视频失败: {e}")
-            return {"success": False, "error": str(e), "attempts": 1}
+            return self.fail(e, attempts=1)
 
     def _call_kling(self, image_path: Path, prompt: str, config) -> bytes:
         """调用可灵 API"""

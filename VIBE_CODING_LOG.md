@@ -6,6 +6,26 @@
 
 ---
 
+## 2026-09-25 — M1 全量落地：真实调用与恢复能力（六项全完成，测试 81 例）
+
+**User Prompt:** "本会话是开发会话" → "按计划继续吧"（按 `DEVELOPMENT_PLAN.md` M1 执行）。
+
+**Done:** M1 六项工作全部实现并通过测试（47→81 例，新增 `tests/test_m1.py` 34 例）：
+1. **demo/production 双模式**：`config.yaml` 顶层 `mode`；`Config.validate_production()` 启动校验（placeholder/缺 key/价格未知→拒跑）；静音降级显式标记 `degraded`——demo 放行、production 拒绝自动通过并整集 failed。
+2. **状态扩展**：镜头子任务加 `source/error_class/external_task_id/input_hash/attempts_log`；`migrate_state()` 兼容旧 YAML（ep01 实测迁移）；`failed` 入枚举。
+3. **原子写 + 运行锁**：`save` 走 tmp+`os.replace`+fsync；新增 `utils/project_lock.py`（flock，拿不到锁立即退出，防 CLI/机器人双写）。
+4. **错误分类**：`classify_exception()`（timeout/rate_limit/network/unknown=可重试；auth/param=failed 终态）；`BaseExecutor.fail()` 统一携带。
+5. **外部任务恢复框架**：派发前落 `generating`+input_hash；executor 契约支持 `{submitted, external_task_id}` 异步在途；中断重启后凭 task_id 轮询恢复、不重复提交付费任务（真实 provider M2 兑现）。
+6. **三级预算**：`budget.per_shot/episode/project_cny`；plan 期+派发期双检（修掉"同轮批量派发用旧快照超支"缺陷）；镜头级超额→升级终态、集/项目级→挂起不误判。**三官 ep01 占位 approved 已实际作废重置**（`--reset-episode`，磁盘文件未动，cost 保留）；production 启动还会拦截占位链 approved 集防死局复发。
+- 行为变更：全镜头升级→显式整集 failed 终态（取代停滞中止），`test_retry_escalation.py::TestAllShotsFail` 断言已更新锁定新契约。
+- 文档：CLAUDE.md 同步（目录树修掉 drama/ 重复块、M1 状态、切正式模式清单）。
+
+**Why:** 单一决策路径——执行时预算拦截不直接落终态而是留给下轮 plan 走 director 升级；作废保留 cost_summary（钱已花，防反复作废烧钱）；降级拒绝只在 production（demo 静音降级是离线 e2e 的腿，砍了基线就断）。
+
+**Next:** M2（需用户输入：provider key/预算上限/画风参考；先刷新 `references/模型选型_2026-06.md`）；M1 框架中 `submitted` 轮询在真实异步 API 接入时需配轮询间隔（当前占位同步完成，不触发停滞检测）。
+
+---
+
 ## 2026-09-24 — M0 开发启动：测试基线 47 例 + CI + 文档校准
 
 **User Prompt:** 用户纠正"怎么变成在写文章了"（已存记忆 avoid-meta-work-drift）→ "如果评审收口的话，直接开始进入开发阶段，能做多少做多少"。

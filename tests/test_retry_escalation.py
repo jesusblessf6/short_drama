@@ -101,11 +101,11 @@ class TestEscalationE2E:
 class TestAllShotsFail:
     def test_all_shots_escalate_terminates_without_false_success(
             self, tmp_path, offline_audio, monkeypatch):
-        """全镜头 i2v 失败升级（compose 0 片段）：必须安全中止且不误报完成。
+        """全镜头 i2v 失败升级（compose 0 片段）：明确整集失败终态，不误报完成。
 
-        已知局限（CLAUDE.md 待实现 #7）：当前以"停滞检测 3 轮中止"兜底，
-        无显式"整集失败"终态。本测试锁定下限行为：终止 + composite 非 approved
-        + 不产出成片文件。未来加显式终态后，本测试应更新断言。
+        M1 起：全镜头终态但 0 个 approved → 立即写 failed 终态
+        （composite/director_review=failed），不再依赖"停滞检测中止"兜底，
+        也不空跑 audio/compose。
         """
         from drama.executors.img2video import Img2VideoExecutor
 
@@ -118,17 +118,20 @@ class TestAllShotsFail:
             lambda self, task: {"success": False, "error": "mock: 全部失败"})
 
         orch.init_states("ep01")
-        orch.run(episode_filter="ep01")     # 应回落停滞检测而终止，不得死循环
+        orch.run(episode_filter="ep01")
 
         s = orch.state_mgr.load("ep01")
         assert s["shots"], "应有结构化镜头"
         assert all(sh["img2video"]["status"] == "escalated" for sh in s["shots"])
-        assert s["composite"]["status"] != "approved"   # 0 片段不得误报合成成功
+        # 显式整集失败终态（取代旧的停滞中止）
+        assert s["composite"]["status"] == "failed"
+        assert s["director_review"]["status"] == "failed"
+        assert "无可合成片段" in (s["composite"].get("error") or "")
         out = proj.get_path("output") / "ep01.mp4"
         assert not out.exists()
-        # 前置环节不受牵连：t2i 正常、audio 正常
+        # 前置环节不受牵连：t2i 正常；audio 不再空跑（无片可合，快速失败）
         assert all(sh["text2img"]["status"] == "approved" for sh in s["shots"])
-        assert s["audio"]["status"] == "approved"
+        assert s["audio"]["status"] == "pending"
 
 
 class TestT2iFailure:

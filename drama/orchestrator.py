@@ -16,16 +16,21 @@
 """
 
 import argparse
+import hashlib
+import json
 import logging
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .config import Config, ProjectConfig
-from .state import StateManager, new_shot_state
+from .state import StateManager, new_episode_state, new_shot_state
 from .notify import Notifier
 from .utils.cost_tracker import CostTracker
+from .utils.project_lock import ProjectLock
+from .utils.retry import is_retryable
 from .review import FileReviewChannel, parse_review_reply, parse_with_llm
 
 logger = logging.getLogger(__name__)
@@ -42,11 +47,11 @@ class Action:
     extra: dict | None = None   # 额外参数（如升级 reason）
 
 
-# 镜头终态（不再需要调度）：t2i 升级 → 无图无法成片；或 i2v 已通过/已升级
+# 镜头终态（不再需要调度）：t2i 升级/failed → 无图无法成片；或 i2v 已通过/已升级/已失败
 def _shot_done(shot: dict) -> bool:
-    if shot["text2img"]["status"] == "escalated":
+    if shot["text2img"]["status"] in ("escalated", "failed"):
         return True
-    return shot["img2video"]["status"] in ("approved", "escalated")
+    return shot["img2video"]["status"] in ("approved", "escalated", "failed")
 
 
 class Orchestrator:
@@ -63,6 +68,7 @@ class Orchestrator:
         self.review_channel = FileReviewChannel(project.get_path("state") / "reviews")
         self.agents: dict = {}
         self.executors: dict = {}
+        self._budget_notified: set = set()   # 已发过"预算阻断"通知的键，防重复轰炸
         self._init_components()
 
     def _stage_mode(self, stage: str) -> str:
@@ -124,14 +130,51 @@ class Orchestrator:
     # ---------- 主循环 ----------
 
     def run(self, episode_filter: str | None = None, stage_filter: str | None = None):
-        logger.info(f"启动调度器 — 项目: {self.project.name}")
-        self.notifier.send(f"🎬 短剧工厂启动 — 项目: {self.project.name}")
+        states = self.state_mgr.load_all()
+        if self.config.mode == "production":
+            errors = self.config.validate_production()
+            if errors:
+                for e in errors:
+                    logger.error(f"[production] 配置校验失败: {e}")
+                raise SystemExit("正式模式配置校验未通过，拒绝启动（详见日志）")
+            stale = self._placeholder_approved(states, episode_filter)
+            if stale:
+                eps = ", ".join(stale)
+                for e in stale:
+                    logger.error(
+                        f"[production] {e} 已 approved 但产物来自占位链"
+                        f"（调度器会永久跳过 approved 集 → 试点死局）")
+                raise SystemExit(
+                    f"{eps} 的 approved 状态基于占位产物，须先作废: "
+                    f"`python -m drama.orchestrator --project {self.project.project_root} "
+                    f"--reset-episode <集ID>`")
 
+        lock = ProjectLock(self.state_mgr.state_dir / ".lock")
+        try:
+            lock.acquire()
+        except RuntimeError as e:
+            logger.error(str(e))
+            self.notifier.send(str(e))
+            return
+
+        logger.info(f"启动调度器 — 项目: {self.project.name}"
+                    f"（模式: {self.config.mode}）")
+        self.notifier.send(f"🎬 短剧工厂启动 — 项目: {self.project.name}"
+                           f"（{self.config.mode}）")
+        try:
+            self._run_loop(episode_filter, stage_filter)
+        finally:
+            self.cost.save_report()
+            logger.info(self.cost.log())
+            self._check_cost_deviation()
+            lock.release()
+
+    def _run_loop(self, episode_filter: str | None, stage_filter: str | None):
         prev_sig = None
         stall = 0
         while True:
             states = self.state_mgr.load_all()
-            # 重置中断任务（generating/drafting → pending）
+            # 重置中断任务（generating/drafting → pending；有外部任务ID的保持待轮询）
             for state in states:
                 self.state_mgr.reset_interrupted(state)
                 self.state_mgr.save(state["episode"], state)
@@ -142,6 +185,8 @@ class Orchestrator:
                              if s["director_review"]["status"] == "reviewing"]
                 rejected = [s["episode"] for s in states
                             if s["director_review"]["status"] == "rejected"]
+                failed = [s["episode"] for s in states
+                          if s["director_review"]["status"] == "failed"]
                 if reviewing:
                     logger.info(f"⏸ 等待人工审核: {reviewing}（--review-reply 提交后重跑）")
                     self.notifier.send(f"⏸ 等待人工审核: {', '.join(reviewing)}")
@@ -150,6 +195,10 @@ class Orchestrator:
                                 f"`--reset-review <ep>` 复活,或编辑状态文件决定重跑环节")
                     self.notifier.send(f"↩️ {', '.join(rejected)} 被打回,"
                                        f"用 --reset-review 复活")
+                elif failed:
+                    logger.info(f"❌ 整集失败终态: {failed}（无可合成片段/正式模式拒绝降级）"
+                                f"— 排查后 `--reset-episode <ep>` 重做")
+                    self.notifier.send(f"❌ {', '.join(failed)} 整集失败，需人工排查")
                 else:
                     logger.info("所有任务完成")
                     self.notifier.send(f"✅ 项目 '{self.project.name}' 当前可执行任务已全部完成")
@@ -170,9 +219,29 @@ class Orchestrator:
             for action in actions:
                 self.execute_action(action)
 
-        self.cost.save_report()
-        logger.info(self.cost.log())
-        self._check_cost_deviation()
+    def _placeholder_approved(self, states: list[dict],
+                              episode_filter: str | None) -> list[str]:
+        """正式模式启动检查：approved 集的产物是否来自占位链。
+
+        占位链判定：任一镜头的 t2i/i2v 产物来源缺失或为 placeholder
+        （M1 之前的旧状态无 source 字段，视为占位——历史上从未接过真实服务）。
+        这样的集被调度器永久跳过（approved），正式投产即死局，须显式作废。
+        """
+        stale = []
+        for s in states:
+            ep = s["episode"]
+            if episode_filter and ep != episode_filter:
+                continue
+            if s["director_review"]["status"] != "approved":
+                continue
+            placeholder_chain = any(
+                shot[sub].get("source") in (None, "placeholder")
+                for shot in s.get("shots", [])
+                for sub in ("text2img", "img2video")
+            )
+            if placeholder_chain:
+                stale.append(ep)
+        return stale
 
     def _progress_sig(self, states: list[dict]):
         """进度指纹：用于停滞检测"""
@@ -197,8 +266,8 @@ class Orchestrator:
             ep = state["episode"]
             if episode_filter and ep != episode_filter:
                 continue
-            if state["director_review"]["status"] == "approved":
-                continue
+            if state["director_review"]["status"] in ("approved", "failed"):
+                continue   # failed=整集失败终态（无可合成/正式模式拒绝降级），需人工 reset
             actions.extend(self._plan_episode(ep, state, max_retry, stage_filter))
         return self._apply_parallelism(actions)
 
@@ -218,12 +287,24 @@ class Orchestrator:
             if self._stage_ok(stage_filter, "text2img", "img2video"):
                 return self._plan_shots(ep, state, max_retry)
             return []
+        # 全镜头终态但没有任何可合成片段 → 整集失败终态（明确报错，不误报完成）
+        if not any(s["img2video"]["status"] == "approved"
+                   for s in state.get("shots", [])):
+            self._fail_episode(ep, "shots", "无可合成片段（全部镜头升级/失败）")
+            return []
         # 4 配音
+        if state["audio"]["status"] == "failed":
+            self._fail_episode(ep, "audio", state["audio"].get("error") or "audio failed")
+            return []
         if state["audio"]["status"] != "approved":
             if self._stage_ok(stage_filter, "audio") and "audio" in self.executors:
                 return [Action("executor", "audio", ep, state)]
             return []
         # 5 合成
+        if state["composite"]["status"] == "failed":
+            self._fail_episode(ep, "compose",
+                               state["composite"].get("error") or "compose failed")
+            return []
         if state["composite"]["status"] != "approved":
             if self._stage_ok(stage_filter, "compose") and "compose" in self.executors:
                 return [Action("executor", "compose", ep, state)]
@@ -254,15 +335,34 @@ class Orchestrator:
         return acts
 
     def _plan_shot_action(self, ep, state, shot, max_retry) -> Action | None:
-        """单镜头下一步：先 t2i 后 i2v；耗尽预算 → 升级 director。唯一的重试判定处。"""
+        """单镜头下一步：先 t2i 后 i2v；耗尽预算 → 升级 director。唯一的重试判定处。
+
+        M1：generating 且有 external_task_id → 派发轮询（恢复在途付费任务，
+        不重复提交）；预算检查先于重试预算（烧不起就别再提交）。
+        """
         for sub in ("text2img", "img2video"):
             st = shot[sub]
             if st["status"] == "approved":
                 continue
-            if st["status"] == "escalated":
-                return None  # 已升级为终态
+            if st["status"] in ("escalated", "failed"):
+                return None  # 已终态
+            if st["status"] == "generating":
+                if st.get("external_task_id"):
+                    return Action("executor", sub, ep, state, shot)  # 轮询在途任务
+                return None  # 无外部任务ID的 generating 由 reset_interrupted 归位
             if sub == "img2video" and shot["text2img"]["status"] != "approved":
                 return None  # 必须先有图
+            # 预算闸门：镜头级超额 → 升级终态；集/项目级超额 → 停止新付费提交
+            block = self._generation_budget_block(ep, state, shot, sub)
+            if block == "shot":
+                return Action("agent", "director", ep, state, shot,
+                              {"reason": f"{sub}_budget_exhausted"})
+            if block:
+                self._notify_budget_once(
+                    f"{ep}:{block}",
+                    f"💰 {ep} {shot['id']} {sub} 因{'集' if block == 'episode' else '项目'}"
+                    f"级预算耗尽停止新付费任务（调整 budget 后可继续）")
+                return None
             budget = self._budget_for(sub, shot, max_retry)
             if st["attempts"] >= budget:
                 return Action("agent", "director", ep, state, shot,
@@ -279,6 +379,61 @@ class Orchestrator:
         if t == "lip_sync":
             return int(max_retry.get("lip_sync", 3))
         return int(max_retry.get("img2video_simple", 5))
+
+    # ---------- 预算（M1） ----------
+
+    def _paid_unit_cost(self, name: str) -> float:
+        """付费外部生成的单次预估成本（¥）。占位/本地 ffmpeg/edge-tts 为 0，不受预算闸门约束。"""
+        if name in ("text2img", "img2video"):
+            return float(self.config.apis[name].cost_per_call or 0.0)
+        return 0.0
+
+    def _project_spent(self) -> float:
+        return sum(s.get("cost_summary", {}).get("cost_cny", 0) or 0
+                   for s in self.state_mgr.load_all())
+
+    def _generation_budget_block(self, ep, state, shot, sub) -> str | None:
+        """提交付费生成任务前的预算检查（按单次预估提前量）。返回 None=放行。
+
+        返回 "shot" → 该镜头预算烧完（调用方升级为镜头终态）；
+        返回 "episode"/"project" → 更大范围耗尽（调用方停止一切新付费提交，等预算调整）。
+        """
+        unit = self._paid_unit_cost(sub)
+        if unit <= 0:
+            return None
+        b = self.config.budget
+        if b.per_shot_cny is not None:
+            spent = ((shot["text2img"].get("cost") or 0)
+                     + (shot["img2video"].get("cost") or 0))
+            if spent + unit > b.per_shot_cny:
+                return "shot"
+        if b.per_episode_cny is not None:
+            spent_ep = state.get("cost_summary", {}).get("cost_cny", 0) or 0
+            if spent_ep + unit > b.per_episode_cny:
+                return "episode"
+        if b.project_cny is not None:
+            if self._project_spent() + unit > b.project_cny:
+                return "project"
+        return None
+
+    def _notify_budget_once(self, key: str, message: str) -> None:
+        if key in self._budget_notified:
+            return
+        self._budget_notified.add(key)
+        logger.warning(message)
+        self.notifier.send(message)
+
+    def _fail_episode(self, ep: str, stage: str, reason: str) -> None:
+        """整集失败终态：composite/director_review 置 failed，本集不再自动派发。
+
+        显式终态取代旧行为的"停滞中止"——不误报完成，也不留悬念。
+        """
+        self.state_mgr.update_task(ep, "composite", status="failed", error=reason)
+        self.state_mgr.update_task(ep, "director_review", status="failed",
+                                   result="failed", notes=f"[{stage}] {reason}")
+        logger.error(f"[{ep}] 整集失败（{stage}）: {reason}")
+        self.notifier.send(f"❌ {ep} 整集失败（{stage}）: {reason}"
+                           f"— 排查后 --reset-episode 重做")
 
     def _all_shots_done(self, state) -> bool:
         shots = state.get("shots", [])
@@ -320,8 +475,39 @@ class Orchestrator:
         self._apply_agent_result(action, result)
 
     def _execute_executor(self, action: Action) -> None:
-        result = self.executors[action.name].run(self._build_executor_task(action))
+        task = self._build_executor_task(action)
+        # 镜头级生成任务：派发前先落 generating + 输入指纹（+在途任务ID）。
+        # 进程中断后凭 external_task_id 轮询恢复，避免重复提交付费任务。
+        if action.name in ("text2img", "img2video") and action.shot:
+            shot, sub = action.shot, action.name
+            # 预算复检：plan 用的状态快照可能已过时（同轮批量派发、或轮询期间
+            # 其他任务入账），以执行时点的最新成本为准，防止批内超支。
+            # 拦截时不动状态，留给下一轮 plan 走正规升级/挂起路径（单一决策路径）。
+            fresh = self.state_mgr.load(action.episode)
+            fresh_shot = next((s for s in fresh.get("shots", [])
+                               if s["id"] == shot["id"]), None)
+            if fresh_shot is not None:
+                block = self._generation_budget_block(
+                    action.episode, fresh, fresh_shot, sub)
+                if block:
+                    self._notify_budget_once(
+                        f"{action.episode}:{block}",
+                        f"💰 {action.episode} {shot['id']} {sub} 预算复检拦截"
+                        f"（{'镜头' if block == 'shot' else '集' if block == 'episode' else '项目'}级），"
+                        f"跳过本次提交")
+                    return
+            updates = {"status": "generating", "input_hash": self._input_hash(task)}
+            if task.get("external_task_id"):
+                updates["external_task_id"] = task["external_task_id"]
+            self.state_mgr.update_shot(action.episode, shot["id"], sub, **updates)
+        result = self.executors[action.name].run(task)
         self._apply_executor_result(action, result)
+
+    def _input_hash(self, task: dict) -> str:
+        """提交输入指纹：prompt/参考图/时长等关键字段的 hash（审计输入是否变过）"""
+        keys = ("prompt", "negative_prompt", "image_path", "duration")
+        payload = json.dumps({k: task.get(k) for k in keys}, sort_keys=True)
+        return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
     # ---------- 人审(轻量聊天式) ----------
 
@@ -395,6 +581,25 @@ class Orchestrator:
         logger.info(f"{episode} director_review 已重置: {old} → pending")
         return True
 
+    def reset_episode(self, episode: str) -> bool:
+        """整集作废重置：所有环节回 pending、镜头清空、产物指针清空。
+
+        用途（M1）：作废占位产物——如 ep01 占位链 approved 后被调度器永久
+        跳过，不作废则正式投产第一集死局。cost_summary 保留累计
+        （钱已花，项目预算不因作废重置，防反复作废烧钱）。
+        """
+        state = self.state_mgr.load(episode)
+        if state is None:
+            logger.error(f"{episode} 状态不存在")
+            return False
+        fresh = new_episode_state(state.get("episode_num", 1), state.get("act", ""))
+        fresh["cost_summary"] = state.get("cost_summary", fresh["cost_summary"])
+        self.state_mgr.save(episode, fresh)
+        self.review_channel.clear(f"{episode}:director")
+        logger.info(f"{episode} 已整集作废重置（累计成本保留: "
+                    f"¥{fresh['cost_summary'].get('cost_cny', 0)}）")
+        return True
+
     # ---------- context / task 构建 ----------
 
     def _build_agent_context(self, action: Action) -> dict:
@@ -426,6 +631,8 @@ class Orchestrator:
                 "scene": shot.get("scene", ""),
                 "reference_images": [],
                 "output_path": str(out),
+                # 在途异步任务的恢复凭据：有值时 provider 应先轮询该任务，勿重复提交
+                "external_task_id": shot["text2img"].get("external_task_id"),
             }
         if name == "img2video":
             img = root / shot["text2img"]["file"]
@@ -436,6 +643,8 @@ class Orchestrator:
                 "prompt": shot["img2video"].get("prompt", ""),
                 "output_path": str(out),
                 "duration": int(shot.get("duration", 4)),
+                # 同上：恢复轮询凭据
+                "external_task_id": shot["img2video"].get("external_task_id"),
             }
         if name == "audio":
             out = self.project.get_path("audio") / f"{ep}.wav"
@@ -548,10 +757,34 @@ class Orchestrator:
 
         if name in ("text2img", "img2video"):
             sub = name
+            # 异步任务已提交未完成：保持 generating + 记任务ID，下轮轮询。
+            # 不算失败、不耗 attempts（尝试仍在途，完成时才结算）。
+            if not success and result.get("submitted") and result.get("external_task_id"):
+                self.state_mgr.update_shot(ep, shot["id"], sub, status="generating",
+                                           external_task_id=result["external_task_id"])
+                logger.info(f"[{ep}] {shot['id']} {sub} 外部任务在途: "
+                            f"{result['external_task_id']}（下轮轮询）")
+                return
             attempts = shot[sub]["attempts"] + 1
+            attempts_log = shot[sub].get("attempts_log", []) + [{
+                "at": datetime.now().isoformat(timespec="seconds"),
+                "ok": bool(success),
+                "error_class": result.get("error_class"),
+                "error": result.get("error"),
+            }]
             if not success:
-                self.state_mgr.update_shot(ep, shot["id"], sub,
-                                           status="qa_fail", attempts=attempts)
+                error_class = result.get("error_class", "unknown")
+                fatal = not is_retryable(error_class)
+                self.state_mgr.update_shot(
+                    ep, shot["id"], sub,
+                    status="failed" if fatal else "qa_fail",
+                    attempts=attempts, error_class=error_class,
+                    external_task_id=None, attempts_log=attempts_log)
+                if fatal:
+                    # 鉴权/参数类错误重试无用：直接镜头终态，避免重复扣费
+                    self.notifier.send(
+                        f"🛑 {ep} {shot['id']} {sub} 不可重试错误（{error_class}）"
+                        f"→ failed 终态: {result.get('error', '')[:120]}")
                 return
             file_abs = result.get("file")
             cost = result.get("cost", 0.0)
@@ -562,21 +795,49 @@ class Orchestrator:
                 ep, shot["id"], sub,
                 status="approved" if passed else "qa_fail",
                 file=self._rel(file_abs), attempts=attempts, cost=cost,
+                source=result.get("source"), error_class=None,
+                external_task_id=None, attempts_log=attempts_log,
             )
         elif name == "audio":
             if success:
                 cost = result.get("cost", 0.0)
+                degraded = bool(result.get("degraded"))
                 self.cost.record_api("audio", cost)
                 self.state_mgr.add_cost(ep, api_calls=1, cost_cny=cost)
-                self.state_mgr.update_task(ep, "audio", status="approved",
-                                           file=self._rel(result.get("file")))
+                if degraded and self.config.mode == "production":
+                    # 正式模式：降级产物（静音轨）不得自动通过 → 整集失败，人工介入
+                    self.state_mgr.update_task(
+                        ep, "audio", status="failed", degraded=True,
+                        source=result.get("source"),
+                        file=self._rel(result.get("file")),
+                        error="TTS 降级为静音轨，正式模式拒绝自动通过")
+                    self._fail_episode(ep, "audio", "正式模式禁止静音降级")
+                else:
+                    self.state_mgr.update_task(
+                        ep, "audio", status="approved", degraded=degraded,
+                        source=result.get("source"),
+                        file=self._rel(result.get("file")))
+            elif not is_retryable(result.get("error_class", "unknown")):
+                self.state_mgr.update_task(ep, "audio", status="failed",
+                                           error=result.get("error"),
+                                           error_class=result.get("error_class"))
+                self._fail_episode(ep, "audio",
+                                   f"audio 不可重试错误: {result.get('error_class')}")
+            # 可重试失败：保持 pending 下轮再试（停滞检测兜底）
         elif name == "compose":
             if success:
                 cost = result.get("cost", 0.0)
                 self.cost.record_api("compose", cost)
                 self.state_mgr.add_cost(ep, api_calls=1, cost_cny=cost)
                 self.state_mgr.update_task(ep, "composite", status="approved",
-                                           file=self._rel(result.get("file")))
+                                           file=self._rel(result.get("file")),
+                                           source=result.get("source"))
+            elif not is_retryable(result.get("error_class", "unknown")):
+                self.state_mgr.update_task(ep, "composite", status="failed",
+                                           error=result.get("error"))
+                self._fail_episode(ep, "compose",
+                                   f"compose 不可重试错误: {result.get('error_class')}")
+            # 可重试失败：保持 pending 下轮再试（停滞检测兜底）
 
     def _run_visual_qa(self, ep, shot, sub, file_abs) -> bool:
         """内联画面质检。离线/异常默认通过（避免卡死）。"""
@@ -603,7 +864,7 @@ class Orchestrator:
         states = self.state_mgr.load_all()
         if not states:
             return "无状态文件。请先 --init 或 --init-episode 初始化。"
-        lines = [f"项目: {self.project.name} | 集数: {len(states)}"]
+        lines = [f"项目: {self.project.name} | 集数: {len(states)} | 模式: {self.config.mode}"]
         for s in states:
             shots = s.get("shots", [])
             done = sum(1 for sh in shots if _shot_done(sh))
@@ -634,6 +895,9 @@ def main():
                         help="提交人审回复 (如 --review-reply ep01 director \"通过\")")
     parser.add_argument("--reset-review", metavar="EPISODE",
                         help="把被打回/审核中的集重置为 pending 重新激活 (如 --reset-review ep01)")
+    parser.add_argument("--reset-episode", metavar="EPISODE",
+                        help="整集作废重置：环节全回 pending、镜头清空（占位产物作废用，"
+                             "累计成本保留）(如 --reset-episode ep01)")
     parser.add_argument("--verbose", action="store_true", help="详细日志")
     args = parser.parse_args()
 
@@ -658,6 +922,10 @@ def main():
     if args.reset_review:
         ok = orch.reset_review(args.reset_review)
         print(f"{'已重置' if ok else '重置失败'}: {args.reset_review}")
+        return
+    if args.reset_episode:
+        ok = orch.reset_episode(args.reset_episode)
+        print(f"{'已整集作废重置' if ok else '重置失败'}: {args.reset_episode}")
         return
     orch.run(episode_filter=args.episode, stage_filter=args.stage)
 

@@ -50,10 +50,10 @@ class Text2ImgExecutor(BaseExecutor):
                 self._call_placeholder(prompt, task.get("shot_id", ""),
                                        task.get("scene", ""), output_path)
                 return {"success": True, "file": str(output_path),
-                        "cost": 0.0, "attempts": 1}
+                        "cost": 0.0, "attempts": 1, "source": "placeholder"}
             except Exception as e:
                 logger.error(f"占位图生成失败: {e}")
-                return {"success": False, "error": str(e), "attempts": 1}
+                return self.fail(e, attempts=1)
 
         try:
             if provider == "jimeng":
@@ -63,7 +63,8 @@ class Text2ImgExecutor(BaseExecutor):
             elif provider == "flux":
                 image_data = self._call_flux(prompt, api_config)
             else:
-                return {"success": False, "error": f"不支持的 provider: {provider}"}
+                return {"success": False, "error": f"不支持的 provider: {provider}",
+                        "error_class": "param"}
 
             if image_data:
                 output_path.write_bytes(image_data)
@@ -72,13 +73,15 @@ class Text2ImgExecutor(BaseExecutor):
                     "file": str(output_path),
                     "cost": api_config.cost_per_call,
                     "attempts": 1,
+                    "source": provider,
                 }
             else:
-                return {"success": False, "error": "生成返回空数据"}
+                return {"success": False, "error": "生成返回空数据",
+                        "error_class": "unknown"}
 
         except Exception as e:
             logger.error(f"文生图失败: {e}")
-            return {"success": False, "error": str(e), "attempts": 1}
+            return self.fail(e, attempts=1)
 
     def _call_jimeng(self, prompt: str, negative: str, config) -> bytes:
         """调用即梦 API"""

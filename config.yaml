@@ -1,6 +1,21 @@
 # AI 短剧工厂 — 全局配置
 # 与具体项目无关，所有项目共用
 
+# 运行模式（M1）：
+#   demo       = 占位/降级全放行，零 key 可离线跑通（开发验证用，默认）
+#   production = 启动校验配置齐全（key/provider/价格），禁止静默降级自动通过
+mode: demo
+
+# 三级预算（¥，M1）。提交付费生成任务前按单次预估检查，超出即阻止：
+#   per_shot_cny    单镜头 t2i+i2v 累计上限（烧完 → 该镜头升级终态）
+#   per_episode_cny 单集上限（超出 → 该集停止新付费任务，等预算调整）
+#   project_cny     项目总上限（超出 → 全项目停止新付费任务）
+# 只约束付费生成 API（t2i/i2v）；占位/本地 ffmpeg/edge-tts 不受影响。删掉某级即不限。
+budget:
+  per_shot_cny: 30.0
+  per_episode_cny: 400.0
+  project_cny: 2000.0
+
 llm:
   provider: volcengine
   base_url: "https://ark.cn-beijing.volces.com/api/coding/v3"

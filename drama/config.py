@@ -84,6 +84,14 @@ class FFmpegConfig:
 
 
 @dataclass
+class BudgetConfig:
+    """三级预算（¥）。None = 该级不限。提交付费任务前按单次预估检查，超出即阻止。"""
+    per_shot_cny: float | None = None
+    per_episode_cny: float | None = None
+    project_cny: float | None = None
+
+
+@dataclass
 class Config:
     llm: LLMConfig
     apis: dict  # {text2img: APIConfig, img2video: APIConfig, audio: AudioConfig}
@@ -93,6 +101,8 @@ class Config:
     corpus_dir: str
     corpus_sources: list
     raw: dict  # 原始 YAML dict，供扩展用
+    mode: str = "demo"  # demo=占位/降级全放行（离线可跑）；production=严格校验+禁静默降级
+    budget: BudgetConfig = field(default_factory=BudgetConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "Config":
@@ -101,6 +111,15 @@ class Config:
             raw = yaml.safe_load(f)
         raw = _resolve_env_vars(raw)
 
+        mode = str(raw.get("mode", "demo"))
+        if mode not in ("demo", "production"):
+            raise ValueError(f"未知 mode: {mode}（应为 demo 或 production）")
+        budget_raw = raw.get("budget") or {}
+        budget = BudgetConfig(
+            per_shot_cny=budget_raw.get("per_shot_cny"),
+            per_episode_cny=budget_raw.get("per_episode_cny"),
+            project_cny=budget_raw.get("project_cny"),
+        )
         llm = LLMConfig(**raw["llm"])
         apis = {
             "text2img": APIConfig(**raw["apis"]["text2img"]),
@@ -125,7 +144,30 @@ class Config:
             corpus_dir=raw.get("corpus", {}).get("dir", "corpus"),
             corpus_sources=raw.get("corpus", {}).get("sources", []),
             raw=raw,
+            mode=mode,
+            budget=budget,
         )
+
+    def validate_production(self) -> list[str]:
+        """正式模式启动前置校验。返回错误清单（空 = 通过）。
+
+        原则（DEVELOPMENT_PLAN M1-1）：正式模式缺配置立即报错；
+        未知价格不得记成免费（cost_per_call 必须显式 > 0）。
+        """
+        errors = []
+        if self.llm.is_offline:
+            errors.append("llm: 正式模式不能走离线模板（offline=true 或 api_key 为空）")
+        for sub in ("text2img", "img2video"):
+            api = self.apis[sub]
+            if api.provider == "placeholder":
+                errors.append(f"apis.{sub}: 正式模式不能用 placeholder provider")
+            elif not api.api_key:
+                errors.append(f"apis.{sub}: provider={api.provider} 但缺 api_key")
+            if not api.cost_per_call or api.cost_per_call <= 0:
+                errors.append(
+                    f"apis.{sub}: cost_per_call 未配置或为 0"
+                    f"（未知价格不得记成免费，须显式填写 ¥/次）")
+        return errors
 
 
 @dataclass

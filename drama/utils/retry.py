@@ -2,6 +2,10 @@
 
 提供重试装饰器和异步重试工具。
 
+M1 扩展：错误分类。真实 provider 的异常在返回/抛出时标注类别，
+调度器据此区分"值得重试"（网络抖动/超时/限流）与"重试也无用"
+（鉴权失效/参数错误——立即进入 failed 终态，不浪费付费调用）。
+
 > 现状说明（勿误判为死代码）：本模块**当前无调用方是有意的**——占位 provider
 > 不会失败、无需重试。它是**为真实 provider 接入预留**的：接即梦/可灵/真实 GLM
 > 等会超时/限流/偶发失败的外部 API 时，在对应 executor 的 `_call_*` 上套
@@ -18,6 +22,51 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+# 错误类别（M1）。可重试类：瞬态故障，重试有意义；不可重试类：重试只会重复扣费。
+ERROR_CLASSES = {"timeout", "rate_limit", "network", "auth", "param", "unknown"}
+RETRYABLE_ERROR_CLASSES = {"timeout", "rate_limit", "network", "unknown"}
+FATAL_ERROR_CLASSES = {"auth", "param"}
+
+
+def classify_exception(e: BaseException) -> str:
+    """把异常映射到错误类别。httpx 异常精确分类，其余字符串特征兜底。"""
+    if isinstance(e, NotImplementedError):
+        return "param"  # provider 未实现属于配置问题，重试无意义
+    try:
+        import httpx
+        if isinstance(e, httpx.TimeoutException):
+            return "timeout"
+        if isinstance(e, httpx.HTTPStatusError):
+            code = e.response.status_code
+            if code == 429:
+                return "rate_limit"
+            if code in (401, 403):
+                return "auth"
+            if code in (400, 422):
+                return "param"
+            if code >= 500:
+                return "network"  # 服务端瞬态错误，值得重试
+            return "param"
+        if isinstance(e, httpx.TransportError):
+            return "network"
+    except ImportError:
+        pass
+    text = str(e).lower()
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "429" in text or "rate limit" in text or "rate_limit" in text or "限流" in text:
+        return "rate_limit"
+    if "401" in text or "403" in text or "unauthorized" in text or "鉴权" in text:
+        return "auth"
+    if "connection" in text or "network" in text or "connect" in type(e).__name__.lower():
+        return "network"
+    return "unknown"
+
+
+def is_retryable(error_class: str) -> bool:
+    """该错误类别是否值得自动重试"""
+    return error_class in RETRYABLE_ERROR_CLASSES
+
 
 def retry(
     max_attempts: int = 3,
@@ -25,7 +74,7 @@ def retry(
     backoff: float = 2.0,
     exceptions: tuple = (Exception,),
 ):
-    """同步重试装饰器
+    """同步重试装饰器（指数退避）
 
     Args:
         max_attempts: 最大尝试次数

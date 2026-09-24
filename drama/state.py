@@ -2,8 +2,15 @@
 
 每集一个 YAML 状态文件，记录该集所有环节的当前状态。
 Orchestrator 读写状态文件来决定下一步做什么。
+
+M1 扩展（DEVELOPMENT_PLAN）：
+- failed 终态：不可重试错误（鉴权/参数）与"无可合成片段"的整集失败
+- 原子写：tmp + os.replace，写一半崩溃不损坏既有状态
+- 外部任务追踪字段：external_task_id / input_hash / attempts_log / error_class / source
+- migrate_state：加载时补全新字段，兼容既有 YAML（ep01 等旧状态文件无新键）
 """
 
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import Any
@@ -12,8 +19,38 @@ import yaml
 
 
 # 状态枚举
-TASK_STATUSES = {"pending", "drafting", "reviewing", "approved", "rejected"}
-SHOT_STATUSES = {"pending", "generating", "qa_pass", "qa_fail", "approved", "escalated"}
+TASK_STATUSES = {"pending", "drafting", "reviewing", "approved", "rejected", "failed"}
+SHOT_STATUSES = {"pending", "generating", "qa_pass", "qa_fail", "approved",
+                 "escalated", "failed"}
+
+# 镜头子任务（text2img/img2video）的 M1 新增字段及默认值
+_SHOT_SUB_DEFAULTS = (
+    ("source", None),               # 产物来源 provider（placeholder/jimeng/kling/...）
+    ("error_class", None),          # 最后一次失败的错误类别（timeout/auth/param/...）
+    ("external_task_id", None),     # 外部异步任务 ID（提交后回写；恢复轮询凭据）
+    ("input_hash", None),           # 提交时输入指纹（prompt 等），审计输入是否变过
+    ("attempts_log", []),           # 历次尝试记录 [{at, ok, error_class, error}]
+)
+
+
+def migrate_state(state: dict) -> dict | None:
+    """就地补全旧状态文件缺失的 M1 字段（不覆盖已有值），返回 state。"""
+    if not state:
+        return state
+    for task in ("script", "storyboard"):
+        if isinstance(state.get(task), dict):
+            state[task].setdefault("source", None)
+    for task in ("audio", "composite"):
+        if isinstance(state.get(task), dict):
+            state[task].setdefault("source", None)
+            state[task].setdefault("degraded", False)
+            state[task].setdefault("error", None)
+    for shot in state.get("shots", []):
+        for sub in ("text2img", "img2video"):
+            if isinstance(shot.get(sub), dict):
+                for key, default in _SHOT_SUB_DEFAULTS:
+                    shot[sub].setdefault(key, [] if key == "attempts_log" else default)
+    return state
 
 
 def new_episode_state(episode_num: int, act: str) -> dict:
@@ -91,6 +128,11 @@ def new_shot_state(
             "prompt_file": None,
             "attempts": 0,
             "cost": 0.0,
+            "source": None,
+            "error_class": None,
+            "external_task_id": None,
+            "input_hash": None,
+            "attempts_log": [],
         },
         "img2video": {
             "status": "pending",
@@ -101,6 +143,11 @@ def new_shot_state(
             "cost": 0.0,
             "qa_notes": None,
             "last_attempt": None,
+            "source": None,
+            "error_class": None,
+            "external_task_id": None,
+            "input_hash": None,
+            "attempts_log": [],
         },
     }
 
@@ -116,26 +163,31 @@ class StateManager:
         return self.state_dir / f"{episode}.yaml"
 
     def load(self, episode: str) -> dict:
-        """加载某集的状态"""
+        """加载某集的状态（自动补全旧文件缺失的 M1 字段）"""
         path = self._state_path(episode)
         if not path.exists():
             return None
         with open(path) as f:
-            return yaml.safe_load(f)
+            return migrate_state(yaml.safe_load(f))
 
     def save(self, episode: str, state: dict) -> None:
-        """保存某集的状态"""
+        """保存某集的状态。原子写：先写 tmp 再 os.replace，中途崩溃不损坏原文件。"""
         state["updated_at"] = datetime.now().isoformat()
         path = self._state_path(episode)
-        with open(path, "w") as f:
-            yaml.dump(state, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        tmp = path.with_name(path.name + ".tmp")
+        with open(tmp, "w") as f:
+            yaml.dump(state, f, allow_unicode=True, default_flow_style=False,
+                      sort_keys=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
 
     def load_all(self) -> list[dict]:
         """加载所有集的状态"""
         states = []
         for path in sorted(self.state_dir.glob("ep*.yaml")):
             with open(path) as f:
-                states.append(yaml.safe_load(f))
+                states.append(migrate_state(yaml.safe_load(f)))
         return states
 
     def init_episode(self, episode_num: int, act: str) -> dict:
@@ -208,12 +260,17 @@ class StateManager:
         return all(s["img2video"]["status"] == "approved" for s in shots)
 
     def reset_interrupted(self, state: dict) -> dict:
-        """重置中断的任务（generating → pending）"""
+        """重置中断的任务。
+
+        generating 且无 external_task_id → pending（本地占位/未及提交，可安全重跑）；
+        generating 且有 external_task_id → 保持原状：外部付费任务可能在途，
+        盲目重置会导致重复提交重复扣费——恢复时凭 ID 先轮询核对。
+        """
         for shot in state.get("shots", []):
-            if shot["text2img"]["status"] == "generating":
-                shot["text2img"]["status"] = "pending"
-            if shot["img2video"]["status"] == "generating":
-                shot["img2video"]["status"] = "pending"
+            for sub in ("text2img", "img2video"):
+                st = shot[sub]
+                if st["status"] == "generating" and not st.get("external_task_id"):
+                    st["status"] = "pending"
         for task in ["script", "storyboard"]:
             if state[task]["status"] == "drafting":
                 state[task]["status"] = "pending"

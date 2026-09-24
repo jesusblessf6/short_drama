@@ -42,19 +42,26 @@ class AudioExecutor(BaseExecutor):
             elif provider == "jimeng":
                 success = self._jimeng_tts(lines, output_path, audio_config)
             else:
-                return {"success": False, "error": f"不支持的 audio provider: {provider}"}
+                return {"success": False, "error": f"不支持的 audio provider: {provider}",
+                        "error_class": "param"}
         except Exception as e:
             logger.warning(f"配音生成异常，将降级静音轨: {e}")
             success = False
 
-        # 降级：TTS 失败（如无网络）时生成等长静音轨，保证管线不断
+        # 降级：TTS 失败（如无网络）时生成等长静音轨，保证管线不断。
+        # degraded 必须显式标记——demo 模式放行（离线跑通用），正式模式调度器拒绝其通过。
         if not success:
             logger.warning("配音失败，降级为静音轨")
             success = self._silent_track(lines, output_path)
+            if success:
+                return {"success": True, "file": str(output_path), "cost": 0.0,
+                        "source": "silent_fallback", "degraded": True}
 
         if success:
-            return {"success": True, "file": str(output_path), "cost": 0.0}
-        return {"success": False, "error": "配音与静音降级均失败"}
+            return {"success": True, "file": str(output_path), "cost": 0.0,
+                    "source": provider}
+        return {"success": False, "error": "配音与静音降级均失败",
+                "error_class": "unknown"}
 
     def _edge_tts(self, lines: list[dict], output_path: Path, config) -> bool:
         """使用 edge-tts 生成配音；任何失败返回 False（由上层降级静音轨）。
