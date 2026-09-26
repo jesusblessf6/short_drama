@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-09-26 — 判断层 Jev 接入 P1（mock 落地）：三决策点激活、失败链闭环（测试 126 例）
+
+**User Prompt:** "先 mock jev 的接入配置，后面也可能会换本地的开源判断型模型"（承接上轮 `references/Jev决策层引入评估.md` 的 P1）。
+
+**Done:** 判断层全量落地（新增 `tests/test_judgment.py` 19 例，107→126 全绿）：
+- **`drama/judgment.py`**：`Decision`（value/confidence/backend + 弃权语义）、`RuleDecisions`（**有意全弃权**——现有路径已覆盖 rule 语义，复制逻辑=双份真相）、`JevDecisions`（TypeSafe wire 协议 `POST /v1/systemone`，mock=true 走确定性启发式且**响应 wire 格式保真**——解析/阈值/回落代码全部真实受测）、`build_decisions` 工厂。
+- **三处接线**（均在 Orchestrator，判断不进 Agents/Executors）：①`_parse_review` 高置信采信、unclear 弃权走保守复核（choice→verdict dict 契约转换）；②升级处置先问判断层、高置信直接落 escalated **跳过 director LLM 调用**（qa_notes 审计 backend+conf）；③红线预检闸门（剧本→分镜之间）`redline_gate: off|log_only|block`，决策记录 `script.redline_check` 幂等，block 命中 → 生成前打回。
+- **失败链**：Jev 任何异常 → 弃权（jev-error）→ 既有路径；置信度 < min_confidence 视同弃权——绝不阻塞、绝不静默放行。
+- **换本地模型**：endpoint 参数化，jevos 同 wire 协议，本地端点免 key（`is_local_endpoint`）；production 校验：jev 未 mock 需 key 或本地端点、`block` 必须 provider=jev（规则做不了语义判断，诚实失败）。
+- 配置：`judgment:` 段（默认 provider rule / mock true / log_only——**默认行为与历史逐字节一致**，107 例旧测试零改动全过）。
+
+**Why:** 三个教训：①mock 的价值在"格式保真"——模拟响应按真实 wire 格式给，客户端解析代码才是真测试；②mock 置信度要和默认阈值协调（0.88 < 0.9 会让"高置信自动决策"路径永远测不到，先暴露为测试失败）；③测试助手的 kwargs 分流要显式（`max_retry` 是 project 参数被误吞进 judgment 配置，默认预算触发停滞检测提前中止——状态指纹不含 attempts，重试轮次看起来"无进展"）。
+
+**Next:** P2 等拍板（TypeSafe key 或本地 jevos 端点，`judgment.endpoint` 改地址即可）；真实判断上线前用 M2 真实样片校准阈值。M2 主体仍等用户输入（方舟 key/预算/画风）。
+
+---
+
 ## 2026-09-25 — M2 无需拍板部分全量落地：选型刷新+校验修复+媒体验证+抽帧+音色+字幕+对齐（测试 107 例）
 
 **User Prompt:** "现在按照计划开发吧。无需拍板的需求都做掉。"（中途中断两次，"重试重试"/"重试"续跑）。

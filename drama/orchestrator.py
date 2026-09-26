@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config, ProjectConfig
+from .judgment import Decision, build_decisions
 from .state import StateManager, new_episode_state, new_shot_state
 from .notify import Notifier
 from .utils.cost_tracker import CostTracker
@@ -72,6 +73,8 @@ class Orchestrator:
         self.agents: dict = {}
         self.executors: dict = {}
         self._budget_notified: set = set()   # 已发过"预算阻断"通知的键，防重复轰炸
+        # 判断层（Jev 式类型化决策）：provider=rule 时弃权、行为与历史一致
+        self.decisions = build_decisions(config.judgment)
         self._init_components()
 
     def _stage_mode(self, stage: str) -> str:
@@ -294,8 +297,10 @@ class Orchestrator:
             if self._stage_ok(stage_filter, "script") and "writer" in self.agents:
                 return [Action("agent", "writer", ep, state)]
             return []
-        # 2 分镜
+        # 2 分镜（前置红线预检闸门：剧本→分镜之间，烧生成费之前）
         if state["storyboard"]["status"] != "approved":
+            if not self._redline_gate_ok(ep, state):
+                return []
             if self._stage_ok(stage_filter, "storyboard") and "storyboard" in self.agents:
                 return [Action("agent", "storyboard", ep, state)]
             return []
@@ -456,6 +461,50 @@ class Orchestrator:
         shots = state.get("shots", [])
         return bool(shots) and all(_shot_done(s) for s in shots)
 
+    def _redline_gate_ok(self, ep: str, state: dict) -> bool:
+        """红线预检闸门（判断层）。返回 False = 已拦截（director_review=rejected）。
+
+        幂等：决策记录在 script.redline_check，已查不重查（error 态也记录，
+        避免每 tick 重试拖慢；--reset-episode 才重查）。
+        弃权（provider=rule / 判断层无结论）→ 放行，终审人审兜底。
+        """
+        jcfg = self.config.judgment
+        if jcfg.redline_gate == "off" or jcfg.provider != "jev":
+            return True
+        existing = state["script"].get("redline_check")
+        if existing is not None:
+            decision = Decision(value=existing.get("value"),
+                                confidence=existing.get("confidence", 0.0),
+                                backend=existing.get("backend", "jev"))
+        else:
+            script_file = state["script"].get("file")
+            text = ""
+            if script_file:
+                p = self.project.project_root / script_file
+                if p.exists():
+                    text = p.read_text(encoding="utf-8")
+            decision = self.decisions.redline_risk(text, {"episode": ep})
+            self.state_mgr.update_task(ep, "script", redline_check=decision.to_dict())
+            state["script"]["redline_check"] = decision.to_dict()
+        if not decision.decided:
+            if decision.backend == "jev-error":
+                logger.warning(f"[{ep}] 红线预检不可用，放行（终审路径兜底）")
+            return True
+        if decision.value and decision.confidence >= jcfg.min_confidence:
+            if jcfg.redline_gate == "block":
+                self.state_mgr.update_task(
+                    ep, "director_review", status="rejected", result="rejected",
+                    notes=f"redline 预检拦截 conf={decision.confidence:.2f}")
+                state["director_review"]["status"] = "rejected"
+                self.notifier.send(
+                    f"🚫 {ep} 剧本红线预检拦截（conf={decision.confidence:.2f}），"
+                    f"生成前打回")
+                return False
+            logger.warning(f"[{ep}] 剧本红线预检命中（log_only 未拦截）: "
+                           f"conf={decision.confidence:.2f}")
+            self.notifier.send(f"⚠️ {ep} 剧本红线预检命中（log_only，未拦截）")
+        return True
+
     def _stage_ok(self, stage_filter, *stages) -> bool:
         return not stage_filter or stage_filter in stages
 
@@ -488,8 +537,29 @@ class Orchestrator:
             self.notifier.send(f"⚠️ {action.episode} {action.name} 执行失败: {e}")
 
     def _execute_agent(self, action: Action) -> None:
+        # 升级处置：判断层(jev)高置信直接落处置，跳过 director LLM 调用；
+        # 弃权/低置信 → 原 director agent 路径（LLM 复核）。provider=rule 恒走原路径。
+        if (action.name == "director" and action.shot and action.extra
+                and action.extra.get("reason") and self._try_judged_escalation(action)):
+            return
         result = self.agents[action.name].run(self._build_agent_context(action))
         self._apply_agent_result(action, result)
+
+    def _try_judged_escalation(self, action: Action) -> bool:
+        """判断层决定升级处置。采信（高置信）返回 True 并已写状态；否则 False。"""
+        d = self.decisions.escalation_resolution(action.shot)
+        if not d.decided:
+            return False
+        if d.confidence < self.config.judgment.min_confidence:
+            logger.info(f"[{action.episode}] {action.shot['id']} 升级处置置信度不足"
+                        f"（{d.backend} conf={d.confidence:.2f} → {d.value}），走 director 复核")
+            return False
+        logger.info(f"[{action.episode}] {action.shot['id']} 升级处置（{d.backend} "
+                    f"conf={d.confidence:.2f}）: {d.value}")
+        self._apply_escalation(action.episode, action.shot, action.extra["reason"],
+                               {"escalation_resolution": d.value,
+                                "action": f"judgment:{d.backend} conf={d.confidence:.2f}"})
+        return True
 
     def _execute_executor(self, action: Action) -> None:
         task = self._build_executor_task(action)
@@ -561,7 +631,8 @@ class Orchestrator:
             reply = self.review_channel.poll(key)
             if reply is None:
                 continue
-            verdict = self._parse_review(reply, self._review_package(ep, state, "director"))
+            verdict = self._parse_review(reply, self._review_package(ep, state, "director"),
+                                         episode=ep)
             self.review_channel.ack(key)
             if verdict["decision"] == "approve":
                 self.state_mgr.update_task(ep, "director_review", status="approved",
@@ -575,8 +646,18 @@ class Orchestrator:
                 state["director_review"]["status"] = "rejected"
                 self.notifier.send(f"↩️ {ep} 人审打回{tgt}: {verdict['reason']}")
 
-    def _parse_review(self, reply: str, context: str) -> dict:
-        """离线/无 LLM 用规则解析;有真 LLM 升级"""
+    def _parse_review(self, reply: str, context: str, episode: str = "") -> dict:
+        """人审意图解析：判断层(jev)高置信直接采信 → 低置信/弃权走既有路径
+        （有真 LLM 用 LLM 复核，否则规则保守解析）。provider=rule 时判断层弃权，
+        行为与历史逐字节一致。
+        """
+        d = self.decisions.parse_review_intent(reply, {"episode": episode})
+        if d.decided and d.confidence >= self.config.judgment.min_confidence:
+            logger.info(f"人审意图（{d.backend} conf={d.confidence:.2f}）: "
+                        f"{d.value.get('decision')}")
+            return d.value
+        if d.decided:
+            logger.info(f"人审意图置信度不足（{d.backend} conf={d.confidence:.2f}），走复核路径")
         if self.config.llm.is_offline or "director" not in self.agents:
             return parse_review_reply(reply)
         return parse_with_llm(reply, context, self.agents["director"].llm)

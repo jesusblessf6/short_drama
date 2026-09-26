@@ -94,6 +94,46 @@ class BudgetConfig:
 
 
 @dataclass
+class JudgmentConfig:
+    """判断层（Jev 式类型化决策）配置。provider=rule 时判断层弃权、行为与历史一致。
+
+    mock=true 不发网络请求（确定性启发式，验证接线）；接真实 Jev 云改 mock=false+api_key；
+    换本地开源判断模型（jevos 等，同一 wire 协议）改 endpoint 为本地地址即可。
+    """
+    provider: str = "rule"                  # rule | jev
+    endpoint: str = "https://api.typesafe.ai"
+    api_key: str = ""
+    model: str = "jev-latest"
+    mock: bool = True
+    timeout: float = 5.0
+    min_confidence: float = 0.9             # 低于此置信度 → 视同弃权走既有路径
+    redline_gate: str = "log_only"          # off | log_only | block
+
+    def is_local_endpoint(self) -> bool:
+        """本地端点（jevos 等自建服务）无需 api_key"""
+        return any(h in self.endpoint for h in ("127.0.0.1", "localhost", "::1"))
+
+    def validate(self) -> list[str]:
+        """判断层配置自洽性校验（正式模式启动时调用；demo 不拦）"""
+        errors = []
+        if self.provider not in ("rule", "jev"):
+            errors.append(f"judgment: 未知 provider: {self.provider}（rule|jev）")
+        if self.redline_gate not in ("off", "log_only", "block"):
+            errors.append(f"judgment: 未知 redline_gate: {self.redline_gate}（off|log_only|block）")
+        if self.provider == "jev" and not self.mock:
+            # 云端需要 key；本地开源判断端点（同一 wire 协议）不需要
+            if not self.api_key and not self.is_local_endpoint():
+                errors.append(
+                    "judgment: provider=jev 且 mock=false，需配 api_key"
+                    "或改 endpoint 为本地端点（127.0.0.1/localhost）")
+        if self.redline_gate == "block" and self.provider != "jev":
+            errors.append(
+                "judgment: redline_gate=block 需要 provider=jev"
+                "（规则后端做不了语义判断，诚实失败而非假装把关）")
+        return errors
+
+
+@dataclass
 class Config:
     llm: LLMConfig
     apis: dict  # {text2img: APIConfig, img2video: APIConfig, audio: AudioConfig}
@@ -105,6 +145,7 @@ class Config:
     raw: dict  # 原始 YAML dict，供扩展用
     mode: str = "demo"  # demo=占位/降级全放行（离线可跑）；production=严格校验+禁静默降级
     budget: BudgetConfig = field(default_factory=BudgetConfig)
+    judgment: JudgmentConfig = field(default_factory=JudgmentConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "Config":
@@ -122,6 +163,10 @@ class Config:
             per_episode_cny=budget_raw.get("per_episode_cny"),
             project_cny=budget_raw.get("project_cny"),
         )
+        judgment = JudgmentConfig(**{
+            k: v for k, v in (raw.get("judgment") or {}).items()
+            if k in {f.name for f in fields(JudgmentConfig)}
+        })
         llm = LLMConfig(**raw["llm"])
         apis = {
             "text2img": APIConfig(**raw["apis"]["text2img"]),
@@ -148,6 +193,7 @@ class Config:
             raw=raw,
             mode=mode,
             budget=budget,
+            judgment=judgment,
         )
 
     def validate_production(self) -> list[str]:
@@ -169,6 +215,7 @@ class Config:
                 errors.append(
                     f"apis.{sub}: cost_per_call 未配置或为 0"
                     f"（未知价格不得记成免费，须显式填写 ¥/次）")
+        errors.extend(self.judgment.validate())
         return errors
 
 

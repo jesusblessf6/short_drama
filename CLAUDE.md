@@ -30,7 +30,7 @@ short_drama/
 ├── config.yaml              ← 全局配置（API keys、模型、并行度）
 ├── pyproject.toml
 ├── .github/workflows/ci.yml ← CI（py3.11/3.12 + ffmpeg，离线测试）
-├── tests/                   ← 离线回归（107 例 = M0 47 + M1 40 + M2 20；隔离 tmp 项目、零外部服务）
+├── tests/                   ← 离线回归（126 例 = M0 47 + M1 40 + M2 20 + 判断层 19；隔离 tmp 项目、零外部服务）
 │
 ├── drama/                   ← 系统核心包
 │   ├── config.py            配置加载（Config + ProjectConfig + mode/budget 校验）
@@ -38,6 +38,7 @@ short_drama/
 │   ├── llm.py               LLM 调用封装（LLMClient）
 │   ├── notify.py            通知模块（Notifier）
 │   ├── review.py            人审通道 + 意图解析（ReviewChannel/FileReviewChannel）
+│   ├── judgment.py          判断层（Jev 式类型化决策：rule 弃权 / jev mock+真实 wire）
 │   ├── orchestrator.py      调度器（Orchestrator）← 系统核心
 │   ├── agents/              创意层（LLM Agent）
 │   │   ├── base.py          BaseAgent 基类
@@ -140,6 +141,14 @@ short_drama/
   - **音色映射（M2-5）**：project.yaml `production.voice_map`（角色→音色）+ 全局 `narrator_voice`（旁白）/默认音色；未映射角色回退默认
   - **逐句时间戳+字幕（M2-5）**：每句 TTS 产物 ffprobe 实测时长、句首=累加（可解释对齐）→ `06_音频/ep01.srt` + `ep01.lines.yaml` 清单入状态（audio.subtitle_file）→ compose 接入
   - **音画对齐修正（M2-5）**：compose 弃 `-shortest`（截断台词/画面）→ 视频短于音频用 tpad 末帧克隆补齐、音频短于视频保留完整视频；对齐策略写入结果；字幕烧录优先（平台硬字幕）、失败回退 mov_text 软轨
+- [x] **判断层 Jev 接入（P1 mock，2026-09-26，测试 126 例）**：`judgment.py`（Decision/RuleDecisions/JevDecisions + 工厂）。**provider=rule 时判断层弃权、行为与历史逐字节一致**；provider=jev 时三个决策点激活：
+  - **人审意图解析** `_parse_review`：jev 高置信（≥min_confidence）直接采信 → 低置信/unclear/异常走既有路径（LLM 复核/规则保守解析）；choice→verdict dict（targets 镜头号提取）
+  - **升级处置** `_execute_agent`：升级 Action 先问判断层，高置信直接落 escalated（**跳过 director LLM 调用**，qa_notes 审计 backend+conf）；低置信/弃权 → director agent 复核
+  - **红线预检闸门** `_redline_gate_ok`（剧本→分镜之间）：`redline_gate: off|log_only|block`；决策记录 `script.redline_check` 幂等（error 态也记录防每 tick 重试）；block 命中 → director_review=rejected（生成前打回省钱）；弃权放行、终审兜底
+  - **失败链**：Jev 任何异常/超时 → 弃权（backend=jev-error）→ 既有路径，绝不阻塞、绝不静默放行
+  - **换本地开源模型**：wire 协议（`POST /v1/systemone`，state 文本/JSON + questions）兼容 jevos 等，只改 `judgment.endpoint`；本地端点免 api_key（`is_local_endpoint`）
+  - production 校验扩展：provider=jev 且未 mock → 需 key 或本地端点；`redline_gate=block` 必须 provider=jev（规则做不了语义判断，诚实失败）
+  - **P2 待拍板**：TypeSafe early access key 或本地 jevos 端点；上线前用 M2 真实样片校准置信度阈值
 
 ### B. 占位/未接真实外部服务
 
@@ -158,8 +167,9 @@ short_drama/
 ## 当前阶段与下一步（2026-09-25）
 
 - **评审循环已关闭，勿重启**：《短剧投流体系.md》v1.0 定稿（四轮闭环）。参考文档的完美不是交付物，**真实成片才是**——对文档的进一步打磨/复评默认拒绝（此教训存记忆 `avoid-meta-work-drift`）。
-- **M0/M1 完成 + M2 离线部分完成**：选型刷新、结构化校验+修复循环、内容红线、媒体验证、抽帧质检、音色映射、逐句字幕、音画对齐修正。改动一律先跑 `python -m pytest tests/ -q` 保绿（当前 107 例）。
+- **M0/M1 完成 + M2 离线部分完成 + 判断层 P1（mock）完成**：改动一律先跑 `python -m pytest tests/ -q` 保绿（当前 126 例）。
 - **M2 剩余全部等用户拍板**（详见 `references/模型选型_2026-09.md` §四）：①火山方舟账户+key ②模型确认（seedream-4-0 + seedance-2.0?）③真实调用预算上限 ④画风参考/角色确认。拿到后：核实控制台实价 → 接 provider（异步轮询用 M1 契约）→ 30-60s 技术样片。
+- **判断层 P2 等拍板**：TypeSafe early access key 或本地 jevos 端点（`judgment.endpoint` 改本地地址即可，协议同 wire）；真实判断上线前用 M2 样片校准阈值。评估全文见 `references/Jev决策层引入评估.md`。
 - **切正式模式清单**：`config.yaml` 改 `mode: production` + 配齐 key/价格 → 校验不过会拒跑并列出缺失；approved 占位集会被拦截提示 `--reset-episode`。
 
 ## 开发纪律：Vibe Coding 日志

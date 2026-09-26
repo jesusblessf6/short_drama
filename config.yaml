@@ -16,6 +16,25 @@ budget:
   per_episode_cny: 400.0
   project_cny: 2000.0
 
+# 判断层（M2+，详见 references/Jev决策层引入评估.md）：
+#   人审意图解析 / 升级处置 / 红线预检 三个决策点走类型化判断（Jev 式）。
+#   provider: rule = 判断层弃权、行为与历史完全一致（默认，零 key）
+#   provider: jev  = 激活判断层。mock=true 先用确定性模拟跑通管线；
+#                    接 Jev 云改 mock: false + api_key；
+#                    换本地开源判断模型（jevos 等，同一 wire 协议）只改 endpoint，
+#                    如 endpoint: "http://127.0.0.1:8017"（本地端点无需 api_key）。
+#   min_confidence: 置信度低于此值视同弃权，走既有路径（LLM 复核/人工），不静默放行。
+#   redline_gate: off | log_only | block——block 需 provider=jev（正式模式校验强制）。
+judgment:
+  provider: rule
+  endpoint: "https://api.typesafe.ai"
+  api_key: "${JEV_API_KEY}"
+  model: "jev-latest"
+  mock: true
+  timeout: 5.0
+  min_confidence: 0.9
+  redline_gate: log_only
+
 llm:
   provider: volcengine
   base_url: "https://ark.cn-beijing.volces.com/api/coding/v3"
