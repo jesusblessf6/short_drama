@@ -79,9 +79,13 @@ short_drama/
 │
 ├── references/              方法论与行业/系统分析（仅参考，非交付物）
 │   ├── 系统层面分析.md       行业→架构映射、A+B 路线、交互设计（当前战略依据）
+│   ├── 系统架构图.html       archify 生成的交互式系统架构图（运行时产物 visual-check.* 已 ignore）
 │   ├── 短剧投流体系.md       行业分析 v1.0 定稿（四轮评审闭环）
 │   ├── 短剧投流体系-评审意见.md 评审记录（已关闭，勿再续写）
-│   └── 模型选型_2026-06.md  选型快照（已过期，接真实服务前须刷新）
+│   ├── 模型选型_2026-09.md   当前选型快照（推荐方舟单账号组合；§四=待拍板清单）
+│   ├── 模型选型_2026-06.md   旧快照（已过期，仅存档）
+│   ├── Jev决策层引入评估.md  判断层方案（判断点盘点/架构/P1-P3 分期；P1 已落地）
+│   └── REVIEW-M0M1.md       M0/M1 代码评审意见（P2×2/P3×2 已全部落实，已关闭）
 │
 └── projects/                项目数据
     └── 三官/                第一个项目
@@ -99,13 +103,14 @@ short_drama/
         └── .state/          状态文件（每集一个 YAML；ep01 占位 approved 已于 M1 作废重置）
 ```
 
-## 三层架构
+## 三层架构 + 判断层
 
 详见 ARCHITECTURE.md，简述：
 
 1. **Orchestrator（调度器）** — Python 状态机，读状态文件 → 判断下一步 → 派发任务 → 收结果 → 更新状态
 2. **Agents（创意层）** — 5个 LLM Agent，每个有独立 system prompt，继承 BaseAgent
 3. **Executors（执行层）** — 5个 Python 脚本，纯 API 调用，继承 BaseExecutor
+4. **判断层（`judgment.py`，Jev 式类型化决策）** — 只服务 Orchestrator 的三个决策点（人审意图解析/升级处置/红线预检）；provider=rule 弃权走既有路径，provider=jev 激活（mock 或真实 wire）；失败链：异常/低置信 → 弃权 → 既有路径。详见 `references/Jev决策层引入评估.md`
 
 ## 当前实现状态
 
