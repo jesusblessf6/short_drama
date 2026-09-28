@@ -59,6 +59,15 @@ class Img2VideoExecutor(BaseExecutor):
                 logger.error(f"方舟视频生成失败: {e}")
                 return self.fail(e, attempts=1)
 
+        # MiniMax H3：异步任务（seedance 的备用线路，v2 API）
+        if provider == "minimax":
+            try:
+                return self._run_minimax(task, api_config, image_path,
+                                         output_path, duration)
+            except Exception as e:
+                logger.error(f"MiniMax 视频生成失败: {e}")
+                return self.fail(e, attempts=1)
+
         try:
             if provider == "kling":
                 video_data = self._call_kling(image_path, prompt, api_config)
@@ -180,6 +189,86 @@ class Img2VideoExecutor(BaseExecutor):
     def _duration_range(model: str) -> tuple[int, int]:
         """模型支持的时长范围：seedance-2.5 为 4-30s，其余 4-15s（官方能力表）"""
         return (4, 30) if "2.5" in model or "2-5" in model else (4, 15)
+
+    # ---------- MiniMax H3 视频生成（seedance 备用线路，v2 API） ----------
+
+    MINIMAX_DEFAULT_BASE = "https://api.minimax.cn"
+
+    def _run_minimax(self, task: dict, config, image_path: Path,
+                     output_path: Path, duration: int) -> dict:
+        """MiniMax H3 异步任务。wire 协议（platform.minimax.cn 文档 v2）：
+
+        创建 POST {base}/v2/video_generation → {"task_id": ...}
+        （content 数组首帧图必须带 role:"first_frame"；resolution 必填 480P/768P/2K）
+        查询 GET {base}/v2/query/video_generation/{task_id} → {"task": {status, content.url}}
+        status: queued/running/succeeded/failed/cancelled；402=余额不足、422=敏感内容
+        （classify_exception 归 param 终态，重试无意义）。
+        恢复契约与 ark 相同：external_task_id 轮询续传、超时返回 submitted。
+        """
+        import base64
+        import time as _time
+        import httpx
+
+        headers = {"Authorization": f"Bearer {config.api_key}"}
+        base = (config.base_url if "minimax" in config.base_url
+                else self.MINIMAX_DEFAULT_BASE).rstrip("/")
+        task_id = task.get("external_task_id")
+
+        if not task_id:
+            mime = "image/png" if image_path.suffix == ".png" else "image/jpeg"
+            first_frame = (f"data:{mime};base64,"
+                           + base64.b64encode(image_path.read_bytes()).decode())
+            body = {
+                "model": config.model,
+                "content": [
+                    {"type": "text", "text": task["prompt"]},
+                    {"type": "image_url", "image_url": {"url": first_frame},
+                     "role": "first_frame"},
+                ],
+                "resolution": config.extra.get("resolution", "768P"),
+                "duration": max(4, min(15, int(duration))),
+                # 文档：图生视频恒按 adaptive 处理；显式传值仅为文生视频场景兜底
+                "ratio": config.extra.get("ratio", "adaptive"),
+                "aigc_watermark": False,
+            }
+            resp = httpx.post(f"{base}/v2/video_generation",
+                              json=body, headers=headers, timeout=60)
+            resp.raise_for_status()
+            task_id = resp.json().get("task_id")
+            if not task_id:
+                raise RuntimeError(f"minimax 提交未返回 task_id: {resp.json()}")
+            logger.info(f"minimax 视频任务已提交: {task_id}")
+
+        deadline = _time.monotonic() + self.POLL_TIMEOUT
+        while _time.monotonic() < deadline:
+            resp = httpx.get(f"{base}/v2/query/video_generation/{task_id}",
+                             headers=headers, timeout=30)
+            resp.raise_for_status()
+            info = resp.json().get("task") or {}
+            status = info.get("status")
+            if status == "succeeded":
+                video_url = (info.get("content") or {}).get("url")
+                if not video_url:
+                    raise RuntimeError(f"minimax 任务成功但无 content.url: {info}")
+                video = httpx.get(video_url, timeout=300, follow_redirects=True)
+                video.raise_for_status()
+                output_path.write_bytes(video.content)
+                ok, reason = self._verify(output_path)
+                if not ok:
+                    return {"success": False, "error": f"生成文件无效: {reason}",
+                            "error_class": "unknown", "attempts": 1}
+                return {"success": True, "file": str(output_path),
+                        "cost": config.cost_per_call, "attempts": 1,
+                        "source": "minimax"}
+            if status in ("failed", "cancelled"):
+                error = info.get("error") or status
+                return {"success": False, "error": f"minimax 任务 {status}: {error}",
+                        "error_class": "unknown", "attempts": 1}
+            logger.info(f"minimax 视频任务 {task_id}: {status}，"
+                        f"{self.POLL_INTERVAL:.0f}s 后再查")
+            _time.sleep(self.POLL_INTERVAL)
+
+        return {"success": False, "submitted": True, "external_task_id": task_id}
 
     def _call_kling(self, image_path: Path, prompt: str, config) -> bytes:
         """调用可灵 API"""

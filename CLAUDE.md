@@ -30,7 +30,7 @@ short_drama/
 ├── config.yaml              ← 全局配置（API keys、模型、并行度）
 ├── pyproject.toml
 ├── .github/workflows/ci.yml ← CI（py3.11/3.12 + ffmpeg，离线测试）
-├── tests/                   ← 离线回归（138 例 = M0 47 + M1 40 + M2 20 + 判断层 19 + ark provider 12；隔离 tmp 项目、零外部服务）
+├── tests/                   ← 离线回归（144 例 = M0 47 + M1 40 + M2 20 + 判断层 19 + ark 12 + minimax 6；隔离 tmp 项目、零外部服务）
 │
 ├── drama/                   ← 系统核心包
 │   ├── config.py            配置加载（Config + ProjectConfig + mode/budget 校验）
@@ -157,7 +157,8 @@ short_drama/
 
 ### B. 占位/未接真实外部服务
 
-- [x] **方舟 Agent Plan 视觉模型已接入（2026-09-29，官方 PDF 为准）**：`text2img._call_ark`（同步 images/generations）+ `img2video._run_ark`（异步任务提交/轮询/下载，接 M1 `external_task_id` 恢复契约——超时返回 `submitted`、恢复跳过重提交）；专属端点 `…/api/plan/v3` + `AGENT_API_KEY`（**Coding Plan key 不可用**）。config.yaml 默认已切 `provider: ark`；**离线零成本跑须把 provider 改回 placeholder**（或导出 key）。provider=ark 而 key 为空 → 启动即明确报错（不空跑重试）
+- [x] **方舟 Agent Plan 视觉模型已接入（2026-09-29，官方 PDF 为准）**：`text2img._call_ark`（同步 images/generations）+ `img2video._run_ark`（异步任务提交/轮询/下载，接 M1 `external_task_id` 恢复契约——超时返回 `submitted`、恢复跳过重提交）；专属端点 `…/api/plan/v3` + `AGENT_API_KEY`（**Coding Plan key 不可用**）。config.yaml 默认已切 `provider: ark`；**离线零成本跑须把 provider 改回 placeholder**（或导出 key）。provider=ark 而 key 为空 → 启动即明确报错（不空跑重试）。**真实冒烟已通过**（1 图内容命中分镜 + 5s 视频，见 VIBE log 2026-09-29）
+- [x] **MiniMax H3 备用视频线路已接入（2026-09-29）**：`img2video._run_minimax`（v2 协议：`POST /v2/video_generation` + `GET /v2/query/video_generation/{id}`，首帧 `role:"first_frame"`、`resolution` 必填、`content.url` 下载；402 余额/422 敏感 → param 终态）。**手动备用**（非自动 failover）：config.yaml 的 `minimax_fallback` 参考块，切换=把字段上移 img2video 节（provider/api_key/base_url/extra）；任务仅保留 7 天，恢复轮询别拖
 - [ ] 真实 LLM 创意层 — 代码就绪；Agent Plan 的 plan 端点是否同时服务 chat 待实测（`llm.base_url` 换 `/api/plan/v3` + `AGENT_API_KEY` 试一下即可）
 - [ ] `audio._jimeng_tts`（豆包 TTS 升级项；现 edge-tts 免费可用）、compose 转场/调色 — stub/TODO
 - [ ] `executors/sourcing.py` — 纯 stub（ctext.org 抓取未实现；开发计划列为暂缓范围）
@@ -256,6 +257,7 @@ python -m drama.orchestrator --project projects/三官 --reset-episode ep01
 ```
 AGENT_API_KEY=方舟 Agent Plan 企业版专属 key（视觉生成；Coding Plan 的 key 不可用）
 ARK_CODING_API_KEY=火山引擎 Coding Plan key（LLM 创意层，coding 端点用）
+MINIMAX_API_KEY=MiniMax key（备用视频线路 H3；切换 provider 时才需要）
 JIMENG_API_KEY=即梦API密钥（旧槽位，已被 ark 取代）
 KLING_API_KEY=可灵API密钥（旧槽位，已被 ark 取代）
 TELEGRAM_BOT_TOKEN=Telegram机器人token（可选）

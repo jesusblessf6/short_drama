@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-09-29 — MiniMax H3 备用视频线路接入 + compose 字幕韧性修复（测试 144 例）
+
+**User Prompt:** "我想同步接入 minimax h3 模型做视频生成，作为 seedance 的备用，接入文档参考：platform.minimax.cn/docs/api-reference/video-generation-v2-create"。
+
+**Done:** MiniMax H3 v2 协议接入（新增 `tests/test_minimax_provider.py` 6 例，138→144 全绿）：
+- **`img2video._run_minimax`**：`POST /v2/video_generation`（content 首帧必须 `role:"first_frame"`——与 ark 的差异点；`resolution` 必填 480P/768P/2K；duration 钳 4-15s；aigc_watermark false）→ `GET /v2/query/video_generation/{id}`（`task.content.url` 限时下载）→ `_verify`。M1 恢复契约同 ark（超时 submitted/恢复跳过重提）；402 余额/422 敏感经 classify → param 终态。
+- **备用语义 = 手动切换**（非自动 failover）：config.yaml `minimax_fallback` 参考块，切换时把 provider/api_key/base_url/extra 上移到 img2video 节。不做自动切换：双扣费风险 + 计费口径混乱 + 违背单一决策路径；M4 多供应商并发时再评估。
+- **顺带修复 compose 字幕韧性**（minimax 全量回归时暴露）：本机 ffmpeg 无 libass 烧录必败 + 软封装 `-map 0:a` 硬依赖音频流（无音轨片段 exit 234）——软封装改 `-map 0`（不假定音轨）、失败日志带 stderr 摘要、测试按"ffmpeg 是否带 subtitles filter"分档断言（CI 带 libass 验证真实烧录，无 libass 验证降级不阻断）。
+- 文档：选型"接入确认"表加 MiniMax 行、CLAUDE.md B 表/环境变量（MINIMAX_API_KEY）。
+
+**Why:** 备用线路的正确粒度值得记：用户说"备用"，最小正确实现是**配置级切换**而非自动故障转移——自动切换会让同一镜头在两家各扣一次费，且"失败"的语义（内容不合格 vs 服务不可用）不该由 executor 悄悄决定。另：`minimax_fallback` 死配置块依赖 from_yaml 忽略未知 key 的行为（已验证安全），注释里写明"非活动"。
+
+**Next:** M2 主线不变：真实 LLM 创意层实测（plan 端点 chat）→ 30-60s 技术样片。MiniMax 真实冒烟待 key（`MINIMAX_API_KEY` 导出后切 provider 跑 1 条 5s）。
+
+---
+
 ## 2026-09-29 — 方舟真实冒烟通过：图+视频全链路打通（1 图 + 5s 视频）
 
 **User Prompt:** "冒烟跑一下"（key 已配置；顺带处理了 phpbrew init 垃圾行导致的 zsh 报错）。

@@ -161,8 +161,11 @@ class ComposeExecutor(BaseExecutor):
                        episode: str) -> str:
         """字幕接入。返回 "burned" | "soft" | "failed"。
 
-        烧录：subtitles filter 需 libass + 字体；为绕开路径转义与中文目录问题，
-        把 SRT 复制为纯 ASCII 文件名并以输出目录为 cwd 执行。
+        烧录：subtitles filter 需 ffmpeg 带 libass（部分精简二进制没有，
+        `ffmpeg -filters` 可查）；为绕开路径转义与中文目录问题，把 SRT 复制为
+        纯 ASCII 文件名并以输出目录为 cwd 执行。
+        软封装：mov_text 字幕轨，`-map 0` 不假定输入必有音频流（无音轨的
+        纯视频片段也能封装）。
         """
         ffmpeg = self.config.ffmpeg.path
 
@@ -179,7 +182,8 @@ class ComposeExecutor(BaseExecutor):
             if output.exists() and output.stat().st_size > 0:
                 return "burned"
         except subprocess.SubprocessError as e:
-            logger.warning(f"字幕烧录失败（将回退软字幕）: {e}")
+            stderr = (e.stderr or b"")[-200:].decode(errors="replace")
+            logger.warning(f"字幕烧录失败（将回退软字幕）: {stderr or e}")
         finally:
             tmp_srt.unlink(missing_ok=True)
 
@@ -187,7 +191,7 @@ class ComposeExecutor(BaseExecutor):
         try:
             subprocess.run(
                 [ffmpeg, "-y", "-i", str(video), "-i", str(srt),
-                 "-map", "0:v", "-map", "0:a", "-map", "1:0",
+                 "-map", "0", "-map", "1:0",
                  "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text",
                  str(output)],
                 check=True, capture_output=True,
@@ -195,7 +199,8 @@ class ComposeExecutor(BaseExecutor):
             if output.exists() and output.stat().st_size > 0:
                 return "soft"
         except subprocess.SubprocessError as e:
-            logger.warning(f"软字幕封装失败: {e}")
+            stderr = (e.stderr or b"")[-200:].decode(errors="replace")
+            logger.warning(f"软字幕封装失败: {stderr or e}")
 
         output.unlink(missing_ok=True)
         return "failed"
