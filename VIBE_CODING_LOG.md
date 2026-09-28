@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-09-29 — MiniMax H3 真实冒烟通过（5s，145s 生成，首帧锚定有效）
+
+**User Prompt:** "配置好了，现在先切到使用minimax h3吧，然后冒烟试一下"（用户已配 `MINIMAX_API_KEY`；config.yaml 暂切 provider: minimax）。
+
+**Done:** 备用线路真实链路跑通：
+- **零成本探针先验证鉴权与余额**：空 body POST → 返回 `bad_request_error / missing required parameter (model)`（而非 401/402）→ key 有效、账户可用，避免"提交后才发现没余额"。
+- **正式冒烟**：任务 `446713289953567` → 轮询 running×6 → succeeded → 下载 **5.17s / 768x1344 / h264 24fps / 932KB**，145s 完成，_verify 通过。
+- **内容抽帧确认**（自己看了 2.5s 帧）：与 seedance 版本同源首帧——五官、眉尾小痣、泪痕、"英灵不灭/沉痛悼念"挽联、烛光全部保留，**首帧锚定机制有效**（首帧即基准，模型在此基础上动）。
+- 测试路径全程复用 `tests/test_minimax_provider.py` 验证过的同一份执行代码（无 mock 分支），即接入代码本身经真实调用验证。
+
+**Why:** 冒烟前的零成本探针值得固化——鉴权/余额类失败只有真实端点能暴露，而提交生成前用空 body 先探一次，能把"key 无效/没余额"这类必然浪费的失败挡在门外。
+
+**Next:** 切回 ark 还是继续用 minimax 出样片？待用户定（按量计费口径两不同：AFP vs usage.total_seconds）。M2 主线：真实 LLM 创意层 → 30-60s 技术样片。
+
+---
+
 ## 2026-09-29 — MiniMax H3 备用视频线路接入 + compose 字幕韧性修复（测试 144 例）
 
 **User Prompt:** "我想同步接入 minimax h3 模型做视频生成，作为 seedance 的备用，接入文档参考：platform.minimax.cn/docs/api-reference/video-generation-v2-create"。
