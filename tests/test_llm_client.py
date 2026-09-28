@@ -5,6 +5,7 @@
 """
 
 import httpx
+import pytest
 
 from drama.config import LLMConfig
 from drama.llm import LLMClient, strip_thinking
@@ -60,7 +61,33 @@ class TestConfigWithMinimaxLLM:
         cfg = Config.from_yaml("/Users/wing/mySpace/short_drama/config.yaml")
         assert cfg.llm.provider == "minimax"
         assert cfg.llm.base_url == "https://api.minimax.cn/v1"
-        assert cfg.llm.max_tokens >= 4096     # M2 思考块占 token，max_tokens 不能太小
+        assert cfg.llm.max_tokens >= 4096     # M2 系列思考块占 token，max_tokens 不能太小
+        # M3.1-Flash-Preview 实测长文本创作会烧光 reasoning 预算返回空正文，不作创作层默认
+        assert cfg.llm.model == "MiniMax-M2.1"
+
+
+class TestEmptyOutputGuard:
+    """空产出必须响亮失败，不得写 0 字节文件并标记 approved（真实踩过）"""
+
+    def _agent(self, tmp_path):
+        orch, proj = make_orchestrator(tmp_path)
+        return orch.agents["writer"], proj, {
+            "project": proj, "episode": "ep01", "episode_num": 1,
+            "act": "幕", "state": {"script": {"file": None}}}
+
+    @pytest.mark.parametrize("response", ["", "   ", "\n\n\t"])
+    def test_empty_response_raises_and_writes_nothing(self, tmp_path, response):
+        agent, proj, ctx = self._agent(tmp_path)
+        with pytest.raises(ValueError, match="空内容"):
+            agent.parse_output(response, ctx)
+        script = proj.get_path("scripts") / "幕" / "ep01.md"
+        assert not script.exists() or script.stat().st_size == 0
+
+    def test_valid_response_writes_file(self, tmp_path):
+        agent, proj, ctx = self._agent(tmp_path)
+        result = agent.parse_output("# 第1集\n\n正文", ctx)
+        written = proj.project_root / result["file"]
+        assert written.read_text(encoding="utf-8").startswith("# 第1集")
 
     def test_offline_when_key_empty(self, tmp_path):
         orch, _ = make_orchestrator(tmp_path)

@@ -71,6 +71,15 @@ class WriterAgent(BaseAgent):
         episode_num = context["episode_num"]
         act = context.get("state", {}).get("act", "")
 
+        # 空产出必须响亮失败：否则会写 0 字节文件并被标记 approved，
+        # 下游分镜/配音拿到空剧本才暴露（真实踩过：推理模型把 max_tokens
+        # 预算全烧在 reasoning 上，正文返回空）。
+        if not (response or "").strip():
+            raise ValueError(
+                f"ep{episode_num:02d} 剧本 LLM 返回空内容——不写入空文件、"
+                f"不标记 approved。检查模型 max_tokens 是否够用"
+                f"（推理模型会把预算耗在 reasoning 上）或是否被内容策略拦截。")
+
         # 构建输出路径
         scripts_dir = project.get_path("scripts")
         act_dir = scripts_dir / act

@@ -36,10 +36,14 @@ judgment:
   redline_gate: log_only
 
 llm:
-  # 创意层当前接 MiniMax M2.1（OpenAI 兼容端点 /v1/chat/completions，token plan 计费）。
-  # api_key 留空 → 自动离线模板；填上则走真实 LLM（M2 系列输出含 <think> 思考块，
-  # 已由 LLMClient.strip_thinking 统一清理）。
-  # 切回火山：base_url https://ark.cn-beijing.volces.com/api/coding/v3、api_key ${ARK_CODING_API_KEY}、model glm-latest
+  # 创意层接 MiniMax M2.1（OpenAI 兼容端点 /v1/chat/completions，token plan 计费）。
+  # 实测结论（2026-09-29）：M3.1-Flash-Preview 短请求可用，但**长文本创作会把
+  # 整个 max_tokens 预算烧在 reasoning_content 上、正文返回 0 字符**（4096/8192
+  # 均 finish=length），不适合 writer/storyboard；M2 系列输出含 <think> 块，
+  # 已由 LLMClient.strip_thinking 统一清理。
+  # api_key 留空 → 自动离线模板；填上则走真实 LLM。
+  # 切回火山：base_url https://ark.cn-beijing.volces.com/api/coding/v3
+  #   + api_key ${ARK_CODING_API_KEY} + model glm-latest
   provider: minimax
   base_url: "https://api.minimax.cn/v1"
   api_key: "${MINIMAX_API_KEY}"
