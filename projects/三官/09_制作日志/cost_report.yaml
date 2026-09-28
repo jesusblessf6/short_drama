@@ -1,5 +1,10 @@
-breakdown: {}
-total_llm_tokens: 0
+breakdown:
+  writer:
+    llm_tokens: 4601
+    llm_cost_cny: 0.04601
+    api_calls: 0
+    api_cost_cny: 0.0
+total_llm_tokens: 4601
 total_api_calls: 0
-total_cny: 0
-generated_at: '2026-06-22T01:13:17.761100'
+total_cny: 0.05
+generated_at: '2026-09-29T07:42:19.650972'

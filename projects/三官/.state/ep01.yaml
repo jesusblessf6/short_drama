@@ -1,30 +1,38 @@
 episode: ep01
 episode_num: 1
 act: 第一幕_灭门
-updated_at: '2026-09-25T00:23:25.740565'
+updated_at: '2026-09-29T07:42:19.647512'
 script:
-  status: pending
-  file: null
-  attempts: 0
+  status: approved
+  file: 03_剧本/第一幕_灭门/ep01.md
+  attempts: 1
   cost_tokens: 0
+  source: null
 storyboard:
   status: pending
   file: null
   attempts: 0
   cost_tokens: 0
   shot_count: 0
+  source: null
 shots: []
 audio:
   status: pending
   file: null
+  source: null
+  degraded: false
+  error: null
 composite:
   status: pending
   file: null
+  source: null
+  degraded: false
+  error: null
 director_review:
   status: pending
   result: null
   notes: null
 cost_summary:
-  llm_tokens: 0
+  llm_tokens: 4601
   api_calls: 8
-  cost_cny: 0.0
+  cost_cny: 0.046

@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 from typing import Any
 
 from openai import OpenAI
@@ -12,6 +13,25 @@ from openai import OpenAI
 from .config import LLMConfig
 
 logger = logging.getLogger(__name__)
+
+# 推理模型（MiniMax M2 系列等）默认输出 <think>...</think> 思考块。
+# 不清理会污染剧本文件、干扰分镜结构化解析——在客户端统一剥离。
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+def strip_thinking(text: str) -> str:
+    """剥离 <think> 思考块（无该标签的 provider 零影响）。
+
+    两种形态：
+    - 完整块 <think>...</think>：连块删除（多块亦可）
+    - 截断输出（闭标记缺失）：思考内容贯穿到文末，删 <think> 及其后全部
+    """
+    if not text or "<think>" not in text:
+        return text or ""
+    cleaned = _THINK_RE.sub("", text)
+    if "<think>" in cleaned:   # 仍残留开标记 = 闭标记缺失的截断输出
+        cleaned = cleaned.split("<think>")[0].strip()
+    return cleaned.strip()
 
 
 class LLMClient:
@@ -52,7 +72,7 @@ class LLMClient:
             temperature=temperature if temperature is not None else self.config.temperature,
         )
         self.last_usage = response.usage.total_tokens
-        return response.choices[0].message.content
+        return strip_thinking(response.choices[0].message.content)
 
     def chat_with_image(
         self,
@@ -97,7 +117,7 @@ class LLMClient:
             max_tokens=self.config.max_tokens,
         )
         self.last_usage = response.usage.total_tokens
-        return response.choices[0].message.content
+        return strip_thinking(response.choices[0].message.content)
 
     def chat_with_image_url(
         self,

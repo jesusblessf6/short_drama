@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-09-29 — 创意层接 MiniMax M2.1（OpenAI 兼容）+ think 块清理，真实 LLM 实测通过（测试 152 例）
+
+**User Prompt:** "writer/storyboard 可以用minimax token plan 的 base url，key还是那个。你对照文档看看。"
+
+**Done:** 创意层切 MiniMax，真实跑通（新增 `tests/test_llm_client.py` 7 例，144→152 全绿）：
+- **协议核实（探针实测，零烧额度）**：`POST https://api.minimax.cn/v1/chat/completions` 完全 OpenAI 兼容（标准 choices/usage.total_tokens）→ **LLMClient 零改动**可用；M2 / M2.1 / M2.5 三模型均通。config 切 `base_url: https://api.minimax.cn/v1` + `model: MiniMax-M2.1` + `${MINIMAX_API_KEY}`。
+- **真实坑：M2 系列默认输出 `<think>…</think>` 推理块**——不清理会污染剧本文件、干扰 storyboard 的「### 镜头NN」结构化解析。新增 `llm.strip_thinking()`（chat/chat_with_image 双路统一剥离，含 max_tokens 截断的残缺块形态）；对无该标签的 provider 零影响。config 注释注明 max_tokens 勿过小（思考块占 token，太小正文被截）。
+- **真实 LLM 实测**：ep01 script 环节一次通过（¥0.046 / 约 4.6k token），剧本质量可用——人物性格/对话质感/镜头语言到位，M2.1 文笔明显强于占位模板。消耗偏离预警按预期报警（只跑单环节，占比自然偏离基线）。
+- 遗留观察：seedance 视频线路当前 provider=minimax（用户指定），配置内已留切回 ark 的注释。
+
+**Why:** 探针先行（空 body / max_tokens=5 的极小请求）确认兼容性与可用模型，把"文档说的"和"实际能不能用"分开验证，省掉一次完整创作调用的试错。think 块属于**推理模型的通用行为**而非 MiniMax 特性——放在 LLMClient 统一处理而不是 agent 里逐个清洗，是正确的抽象层级（下一个推理模型接入时零成本受益）。
+
+**Next:** 继续 M2 主线：storyboard 真实运行（首次实战 M2-2 校验/修复循环）→ 30-60s 技术样片。
+
+---
+
 ## 2026-09-29 — MiniMax H3 真实冒烟通过（5s，145s 生成，首帧锚定有效）
 
 **User Prompt:** "配置好了，现在先切到使用minimax h3吧，然后冒烟试一下"（用户已配 `MINIMAX_API_KEY`；config.yaml 暂切 provider: minimax）。
