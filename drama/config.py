@@ -53,6 +53,11 @@ class APIConfig:
     api_key: str
     model: str
     cost_per_call: float = 0.0
+    # 火山方舟 Agent Plan 企业版：专属 base_url（https://ark.cn-beijing.volces.com/api/plan/v3）
+    # 与专属 key；其他家 provider 不配则用各家的默认端点
+    base_url: str = "https://ark.cn-beijing.volces.com/api/plan/v3"
+    # provider 特定请求参数透传（如 size/ratio/generate_audio），合并进请求体
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass

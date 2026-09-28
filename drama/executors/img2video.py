@@ -50,6 +50,15 @@ class Img2VideoExecutor(BaseExecutor):
                 logger.error(f"占位视频生成失败: {e}")
                 return self.fail(e, attempts=1)
 
+        # 方舟 Agent Plan：异步任务（提交/轮询/下载），支持凭 external_task_id 恢复
+        if provider == "ark":
+            try:
+                return self._run_ark(task, api_config, image_path,
+                                     output_path, duration)
+            except Exception as e:
+                logger.error(f"方舟视频生成失败: {e}")
+                return self.fail(e, attempts=1)
+
         try:
             if provider == "kling":
                 video_data = self._call_kling(image_path, prompt, api_config)
@@ -88,6 +97,89 @@ class Img2VideoExecutor(BaseExecutor):
         from ..utils.media_check import validate_video
         return validate_video(output_path, self.config.ffmpeg.ffprobe_path,
                               ffmpeg=self.config.ffmpeg.path)
+
+    # ---------- 方舟 Agent Plan 视频生成（异步任务） ----------
+
+    POLL_INTERVAL = 5.0    # 轮询间隔（秒）
+    POLL_TIMEOUT = 300.0   # 单次 run() 内的最长等待；超时交还任务 ID 下轮续轮询
+
+    def _run_ark(self, task: dict, config, image_path: Path,
+                 output_path: Path, duration: int) -> dict:
+        """提交→轮询→下载。已契合 M1 恢复契约：
+
+        - task 带 external_task_id（中断恢复）→ 跳过提交直接轮询，不重复扣费
+        - 轮询超时 → 返回 {success: False, submitted: True, external_task_id}，
+          状态保持 generating，下轮凭 ID 续轮询（不算失败、不耗 attempts）
+        - 任务失败（failed/cancelled）→ 可重试失败（重新提交新任务）
+        """
+        import base64
+        import time as _time
+        import httpx
+
+        headers = {"Authorization": f"Bearer {config.api_key}"}
+        base = config.base_url.rstrip("/")
+        task_id = task.get("external_task_id")
+
+        if not task_id:
+            mime = "image/png" if image_path.suffix == ".png" else "image/jpeg"
+            first_frame = (f"data:{mime};base64,"
+                           + base64.b64encode(image_path.read_bytes()).decode())
+            lo, hi = self._duration_range(config.model)
+            body = {
+                "model": config.model,
+                "content": [
+                    {"type": "text", "text": task["prompt"]},
+                    {"type": "image_url", "image_url": {"url": first_frame}},
+                ],
+                "ratio": config.extra.get("ratio", "9:16"),
+                "duration": max(lo, min(hi, int(duration))),
+                "generate_audio": config.extra.get("generate_audio", False),
+                "watermark": False,
+            }
+            resp = httpx.post(f"{base}/contents/generations/tasks",
+                              json=body, headers=headers, timeout=60)
+            resp.raise_for_status()
+            task_id = resp.json().get("id")
+            if not task_id:
+                raise RuntimeError(f"ark 任务提交未返回 id: {resp.json()}")
+            logger.info(f"ark 视频任务已提交: {task_id}")
+
+        deadline = _time.monotonic() + self.POLL_TIMEOUT
+        while _time.monotonic() < deadline:
+            resp = httpx.get(f"{base}/contents/generations/tasks/{task_id}",
+                             headers=headers, timeout=30)
+            resp.raise_for_status()
+            info = resp.json()
+            status = info.get("status")
+            if status == "succeeded":
+                video_url = (info.get("content") or {}).get("video_url")
+                if not video_url:
+                    raise RuntimeError(f"ark 任务成功但无 video_url: {info}")
+                video = httpx.get(video_url, timeout=300, follow_redirects=True)
+                video.raise_for_status()
+                output_path.write_bytes(video.content)
+                ok, reason = self._verify(output_path)
+                if not ok:
+                    return {"success": False, "error": f"生成文件无效: {reason}",
+                            "error_class": "unknown", "attempts": 1}
+                return {"success": True, "file": str(output_path),
+                        "cost": config.cost_per_call, "attempts": 1,
+                        "source": "ark"}
+            if status in ("failed", "cancelled"):
+                error = info.get("error") or info.get("last_error") or status
+                return {"success": False, "error": f"ark 任务 {status}: {error}",
+                        "error_class": "unknown", "attempts": 1}
+            logger.info(f"ark 视频任务 {task_id}: {status}，"
+                        f"{self.POLL_INTERVAL:.0f}s 后再查")
+            _time.sleep(self.POLL_INTERVAL)
+
+        # 单轮等待耗尽：交还任务 ID，保持 generating 状态续轮询（M1 契约）
+        return {"success": False, "submitted": True, "external_task_id": task_id}
+
+    @staticmethod
+    def _duration_range(model: str) -> tuple[int, int]:
+        """模型支持的时长范围：seedance-2.5 为 4-30s，其余 4-15s（官方能力表）"""
+        return (4, 30) if "2.5" in model or "2-5" in model else (4, 15)
 
     def _call_kling(self, image_path: Path, prompt: str, config) -> bytes:
         """调用可灵 API"""

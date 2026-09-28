@@ -30,7 +30,7 @@ short_drama/
 ├── config.yaml              ← 全局配置（API keys、模型、并行度）
 ├── pyproject.toml
 ├── .github/workflows/ci.yml ← CI（py3.11/3.12 + ffmpeg，离线测试）
-├── tests/                   ← 离线回归（126 例 = M0 47 + M1 40 + M2 20 + 判断层 19；隔离 tmp 项目、零外部服务）
+├── tests/                   ← 离线回归（138 例 = M0 47 + M1 40 + M2 20 + 判断层 19 + ark provider 12；隔离 tmp 项目、零外部服务）
 │
 ├── drama/                   ← 系统核心包
 │   ├── config.py            配置加载（Config + ProjectConfig + mode/budget 校验）
@@ -157,23 +157,24 @@ short_drama/
 
 ### B. 占位/未接真实外部服务
 
-- [ ] `text2img._call_jimeng` / `img2video._call_kling` 等真实 provider — 仍 `NotImplementedError`；**接法见 `references/模型选型_2026-09.md`**（推荐方舟 seedream/seedance，异步任务用 M1 的 `external_task_id`/`submitted` 契约接线）
-- [ ] 真实 GLM 创意层 — 代码就绪，但需 key；本机未实测（当前自动走离线模板）
-- [ ] `audio._jimeng_tts`（豆包 TTS 升级项）、compose 转场/调色 — stub/TODO
+- [x] **方舟 Agent Plan 视觉模型已接入（2026-09-29，官方 PDF 为准）**：`text2img._call_ark`（同步 images/generations）+ `img2video._run_ark`（异步任务提交/轮询/下载，接 M1 `external_task_id` 恢复契约——超时返回 `submitted`、恢复跳过重提交）；专属端点 `…/api/plan/v3` + `AGENT_API_KEY`（**Coding Plan key 不可用**）。config.yaml 默认已切 `provider: ark`；**离线零成本跑须把 provider 改回 placeholder**（或导出 key）。provider=ark 而 key 为空 → 启动即明确报错（不空跑重试）
+- [ ] 真实 LLM 创意层 — 代码就绪；Agent Plan 的 plan 端点是否同时服务 chat 待实测（`llm.base_url` 换 `/api/plan/v3` + `AGENT_API_KEY` 试一下即可）
+- [ ] `audio._jimeng_tts`（豆包 TTS 升级项；现 edge-tts 免费可用）、compose 转场/调色 — stub/TODO
 - [ ] `executors/sourcing.py` — 纯 stub（ctext.org 抓取未实现；开发计划列为暂缓范围）
+- [ ] jimeng/kling 旧 provider 槽位 — 保留 stub，已被 ark 方案取代，勿优先实现
 
 ### 待实现（按优先级）
 
-1. **真实 provider 对接（等用户拍板+key）** — 方舟 seedream-4-0 + seedance-2.0 起步（见选型文档 §三）；异步轮询接 M1 恢复契约
-2. **真实 LLM 模式实测** — 配 key 后验证 writer/storyboard 真实产出（校验/修复循环首次实战）
+1. **真实冒烟 + 30-60s 技术样片**（key 已到位：导出 `AGENT_API_KEY` → 冒烟 1 图 1 视频 → M2 样片流程）
+2. **真实 LLM 模式实测** — 验证 writer/storyboard 真实产出（校验/修复循环首次实战）
 3. **并行执行** — asyncio / ThreadPool（M4 范畴；当前串行）
 4. **compose 转场/调色** — 字幕/对齐已做，转场调色按需后置
 
 ## 当前阶段与下一步（2026-09-25）
 
 - **评审循环已关闭，勿重启**：《短剧投流体系.md》v1.0 定稿（四轮闭环）。参考文档的完美不是交付物，**真实成片才是**——对文档的进一步打磨/复评默认拒绝（此教训存记忆 `avoid-meta-work-drift`）。
-- **M0/M1 完成 + M2 离线部分完成 + 判断层 P1（mock）完成**：改动一律先跑 `python -m pytest tests/ -q` 保绿（当前 126 例）。
-- **M2 剩余全部等用户拍板**（详见 `references/模型选型_2026-09.md` §四）：①火山方舟账户+key ②模型确认（seedream-4-0 + seedance-2.0?）③真实调用预算上限 ④画风参考/角色确认。拿到后：核实控制台实价 → 接 provider（异步轮询用 M1 契约）→ 30-60s 技术样片。
+- **M0/M1 完成 + M2 离线部分 + 判断层 P1 + 方舟视觉 provider 完成**：改动一律先跑 `python -m pytest tests/ -q` 保绿（当前 138 例）。
+- **M2 只剩真实冒烟**（key 已购）：导出 `AGENT_API_KEY` → 冒烟 1 图 1 视频（≈100+800 AFP）→ 30-60s 技术样片 → 画风/角色参考确认。AFP 计费与端点细节见 `references/模型选型_2026-09.md` "接入确认"节。
 - **判断层 P2 等拍板**：TypeSafe early access key 或本地 jevos 端点（`judgment.endpoint` 改本地地址即可，协议同 wire）；真实判断上线前用 M2 样片校准阈值。评估全文见 `references/Jev决策层引入评估.md`。
 - **切正式模式清单**：`config.yaml` 改 `mode: production` + 配齐 key/价格 → 校验不过会拒跑并列出缺失；approved 占位集会被拦截提示 `--reset-episode`。
 
@@ -253,9 +254,10 @@ python -m drama.orchestrator --project projects/三官 --reset-episode ep01
 ## 环境变量
 
 ```
-ARK_CODING_API_KEY=火山引擎API密钥
-JIMENG_API_KEY=即梦API密钥
-KLING_API_KEY=可灵API密钥
+AGENT_API_KEY=方舟 Agent Plan 企业版专属 key（视觉生成；Coding Plan 的 key 不可用）
+ARK_CODING_API_KEY=火山引擎 Coding Plan key（LLM 创意层，coding 端点用）
+JIMENG_API_KEY=即梦API密钥（旧槽位，已被 ark 取代）
+KLING_API_KEY=可灵API密钥（旧槽位，已被 ark 取代）
 TELEGRAM_BOT_TOKEN=Telegram机器人token（可选）
 TELEGRAM_CHAT_ID=Telegram聊天ID（可选）
 ```

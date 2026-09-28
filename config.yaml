@@ -61,16 +61,29 @@ cost_monitor:
     director: 0.10
 
 apis:
+  # 方舟 Agent Plan 企业版视觉模型（官方《接入视觉模型》文档，PDF 在 references/）：
+  #   专属 base_url（必须带 /plan）+ 专属 API Key（AGENT_API_KEY，Coding Plan 的 key 不可用！）
+  #   获取：https://ark.volcengine.com 控制台 → API Key 管理（agentEnterprise）
+  # 离线/零成本跑通时把 provider 改回 placeholder 即可。
   text2img:
-    provider: placeholder   # placeholder=本地占位图；接通后改 jimeng
-    api_key: "${JIMENG_API_KEY}"
-    model: "jimeng-3.0-pro"
-    cost_per_call: 0.5
+    provider: ark
+    api_key: "${AGENT_API_KEY}"
+    model: "doubao-seedream-5-0-pro"     # lite 即将下线，勿用
+    base_url: "https://ark.cn-beijing.volces.com/api/plan/v3"
+    extra:
+      size: "1080x1920"                  # 竖屏 9:16（≤1.5K 档 ≈100 AFP/张）
+    cost_per_call: 0.2                   # ¥ 折算估算（套餐内实扣 AFP；预算闸门用）
+    # provider: placeholder              # ← 离线占位模式（零成本）切回这里
   img2video:
-    provider: placeholder   # placeholder=ffmpeg 静帧转 mp4；接通后改 kling
-    api_key: "${KLING_API_KEY}"
-    model: "kling-2.1"
-    cost_per_call: 2.0
+    provider: ark
+    api_key: "${AGENT_API_KEY}"
+    model: "doubao-seedance-2.0"         # 4-15s；2.5 支持 4-30s/4k（档位允许时）
+    base_url: "https://ark.cn-beijing.volces.com/api/plan/v3"
+    extra:
+      ratio: "9:16"
+      generate_audio: false              # 配音走本项目 TTS 管线
+    cost_per_call: 1.0                   # ¥ 折算估算（720p 5s 输入不含视频 ≈153 AFP 系数）
+    # provider: placeholder              # ← 离线占位模式（零成本）切回这里
   audio:
     provider: edge_tts
     voice: "zh-CN-XiaoxiaoNeural"       # 未映射角色的默认音色

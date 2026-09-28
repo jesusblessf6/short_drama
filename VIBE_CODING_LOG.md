@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-09-29 — 方舟 Agent Plan 视觉模型接入：图（同步）+ 视频（异步/M1 契约）（测试 138 例）
+
+**User Prompt:** "方舟 agent 可以生成视频，文档如下…看看根据文档应该如何接入"（用户提供官方 PDF，后移至 references/ 可读）。
+
+**Done:** 按官方《接入视觉模型》PDF 完成接入（新增 `tests/test_ark_providers.py` 12 例，126→138 全绿）：
+- **关键事实（PDF 确认）**：Agent Plan 企业版有**专属 Base URL** `…/api/plan/v3`（必须带 `/plan`）和**专属 key**（`AGENT_API_KEY`，**Coding Plan key 明确不可用**）；图 `doubao-seedream-5-0-pro`（lite 即将下线）同步 `POST /images/generations`；视频 `doubao-seedance-2.0/2.5` 异步 `POST /contents/generations/tasks` + `GET /tasks/{id}` 轮询；AFP 计费（图 100/张，视频系数 153/170）。
+- **`text2img._call_ark`**：payload 按 PDF（size 1080x1920 竖屏/watermark false/png/url）；负面提示词并入 prompt（seedream 无独立字段）；参考图（角色一致性）base64 传入 `image` 字段；url/b64 双格式响应。
+- **`img2video._run_ark`**：content=[文本+首帧图 base64] + ratio 9:16 + duration 按模型钳制（2.5: 4-30s，其余 4-15s）+ generate_audio false（配音走本项目）；**完整落 M1 恢复契约**——轮询超时返回 `{submitted, external_task_id}` 保持 generating；恢复凭 ID 只轮询不重提交（不重复扣费）；401/403 经 classify_exception → auth 终态不空烧重试。
+- **config.yaml 切 provider: ark**（plan 端点 + AGENT_API_KEY + AFP 注释；placeholder 留注释可一键切回）；`APIConfig` 加 `base_url`/`extra`。
+- **启动防线**：provider=ark 而 key 为空 → run() 启动即 SystemExit 明确报错（诚实失败：不静默降级、不空跑五轮 401），placeholder 不受影响（离线承诺语义保留）。
+- 文档：选型文档加"接入确认"节；CLAUDE.md 环境变量/B 表/测试数同步。
+
+**Why:** PDF 提取走过的弯路：docs.volcengine.com 是 SPA（WebFetch/webReader/jina 全拿不到正文），最终靠用户把 PDF 拷进项目目录 + pypdf 提取——**官方 PDF 是唯一权威源**（此前 web 调研把端点猜成 /api/v3，若照此实现会 404 或错扣费）。macOS 隐私权限挡 Downloads 目录（Bash/Read 都不行），文件进工作区才可读。测试 mock 要对齐真实调用签名（轮询 GET 带 headers，mock 没接住暴露的就是假失败）。
+
+**Next:** 用户侧：导出 `AGENT_API_KEY`（Agent Plan 企业版控制台创建）→ 我跑冒烟（1 图 ≈100 AFP + 1 视频 5s）→ 30-60s 技术样片。遗留：LLM 创意层是否也走 plan 端点待实测；AFP 与预算闸门的换算口径（cost_per_call 现为 ¥ 估算）。
+
+---
+
 ## 2026-09-26 — 判断层 Jev 接入 P1（mock 落地）：三决策点激活、失败链闭环（测试 126 例）
 
 **User Prompt:** "先 mock jev 的接入配置，后面也可能会换本地的开源判断型模型"（承接上轮 `references/Jev决策层引入评估.md` 的 P1）。

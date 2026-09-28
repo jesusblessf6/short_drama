@@ -136,6 +136,16 @@ class Orchestrator:
     # ---------- 主循环 ----------
 
     def run(self, episode_filter: str | None = None, stage_filter: str | None = None):
+        # 真实 provider 但 key 为空：立即明确报错（不静默降级、不空跑五轮重试）
+        missing = [sub for sub in ("text2img", "img2video")
+                   if self.config.apis[sub].provider != "placeholder"
+                   and not self.config.apis[sub].api_key]
+        if missing:
+            raise SystemExit(
+                f"apis.{missing[0]} 等已配置真实 provider 但 api_key 为空"
+                f"（检查 AGENT_API_KEY 环境变量是否导出）。"
+                f"离线零成本运行请把 config.yaml 对应 provider 改回 placeholder。")
+
         states = self.state_mgr.load_all()
         if self.config.mode == "production":
             errors = self.config.validate_production()

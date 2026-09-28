@@ -60,7 +60,10 @@ class Text2ImgExecutor(BaseExecutor):
                 return self.fail(e, attempts=1)
 
         try:
-            if provider == "jimeng":
+            if provider == "ark":
+                image_data = self._call_ark(prompt, negative_prompt, api_config,
+                                            task.get("reference_images") or [])
+            elif provider == "jimeng":
                 image_data = self._call_jimeng(prompt, negative_prompt, api_config)
             elif provider == "midjourney":
                 image_data = self._call_midjourney(prompt, api_config)
@@ -95,6 +98,57 @@ class Text2ImgExecutor(BaseExecutor):
         """产物有效性验证（M2-4）：PIL 可解码"""
         from ..utils.media_check import validate_image
         return validate_image(output_path)
+
+    def _call_ark(self, prompt: str, negative: str, config,
+                  reference_images: list) -> bytes:
+        """火山方舟 Agent Plan 企业版图片生成（同步）。
+
+        端点/参数依据《接入视觉模型》官方文档（references/ 下 PDF）：
+        POST {base_url}/images/generations
+        body: model/prompt/size/output_format/response_format/watermark
+        返回 data[0].url（或 b64_json）。参考图（角色一致性）经 image 字段传
+        base64 data URL；负面提示词并入 prompt（seedream 无独立 negative 字段）。
+        """
+        import base64
+        import httpx
+
+        body = {
+            "model": config.model,
+            "prompt": f"{prompt}\n（避免出现：{negative}）" if negative else prompt,
+            "size": config.extra.get("size", "1080x1920"),   # 竖屏 9:16
+            "output_format": "png",
+            "response_format": "url",
+            "watermark": False,
+        }
+        refs = []
+        for ref in reference_images[:5]:
+            p = Path(ref)
+            if p.exists():
+                mime = "image/png" if p.suffix == ".png" else "image/jpeg"
+                refs.append(f"data:{mime};base64,"
+                            + base64.b64encode(p.read_bytes()).decode())
+        if refs:
+            body["image"] = refs[0] if len(refs) == 1 else refs
+
+        resp = httpx.post(
+            f"{config.base_url.rstrip('/')}/images/generations",
+            json=body,
+            headers={"Authorization": f"Bearer {config.api_key}"},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        if not data:
+            raise RuntimeError("ark 图片生成返回空 data")
+        item = data[0]
+        if item.get("b64_json"):
+            return base64.b64decode(item["b64_json"])
+        url = item.get("url")
+        if not url:
+            raise RuntimeError(f"ark 响应无 url/b64_json: {item}")
+        img = httpx.get(url, timeout=120, follow_redirects=True)
+        img.raise_for_status()
+        return img.content
 
     def _call_jimeng(self, prompt: str, negative: str, config) -> bytes:
         """调用即梦 API"""
