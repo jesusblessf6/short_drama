@@ -1,7 +1,7 @@
 episode: ep01
 episode_num: 1
 act: 第一幕_灭门
-updated_at: '2026-09-29T07:50:34.031959'
+updated_at: '2026-09-29T12:09:11.503247'
 script:
   status: approved
   file: 03_剧本/第一幕_灭门/ep01.md
@@ -33,6 +33,6 @@ director_review:
   result: null
   notes: null
 cost_summary:
-  llm_tokens: 4090
+  llm_tokens: 4413
   api_calls: 0
-  cost_cny: 0.0409
+  cost_cny: 0.0441

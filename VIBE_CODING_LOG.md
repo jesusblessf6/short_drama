@@ -6,9 +6,28 @@
 
 ---
 
+## 2026-09-29 — 修正上一轮误判：M3.1 可用，`reasoning_effort: low` 是正确开关（测试 158 例）
+
+**User Prompt:** "创意层为啥用minimax 2.1啊，现在有m3.1 preview了"（对上一轮结论的合理质疑）。
+
+**Done:** 用户质疑促成了复查——**上一轮结论下早了**，本轮修正：
+- **误判根源**：只测到 max_tokens=8192 就断言"模型不适合长文创作"。补测后：16384 → content 1977 字符、32768 → content 1191 字符，**都能出正文**。真因是"满负载上下文（writer 完整 prompt 含原著）+ 预算不足"的叠加，不是模型能力问题。
+- **正确解法**：`reasoning_effort: "low"`（探针试出；`enable_thinking: false` 被接受但**无效**——仍 28044 字符 reasoning，是有效的干扰项）。置 low 后真实 writer 负载：content 2013 字符、**reasoning 仅 335**、总 4558 token、37s。
+- **工程化**：`LLMConfig.extra_body`（provider 特定参数透传，经 OpenAI SDK 的 extra_body）+ `LLMClient.chat` 条件注入（未配置时不传，对其他 provider 零影响）；补 2 例（透传/不传）。
+- **端到端验证**：M3.1 + low 跑通 ep01 剧本——24s / 4413 token / ¥0.04 / 4324 字节实体剧本（167 行），质量可用。config 默认已切 M3.1。
+- 三方对比（同负载同预算口径）：M2.1 = 20s/4090 token/¥0.04；**M3.1+low = 24s/4413 token/¥0.04**（持平）；M3.1 默认思考 = 145s/15009 token（4.5w 字符 reasoning，预算耗尽则正文空）。
+
+**Why:** 教训一：**"不可用"的结论必须用真实负载 × 足量预算复测**，只测到某个预算就下判断会冤枉模型（我犯了这个错）。教训二：**参数探针要区分"被接受"与"真的生效"**——`enable_thinking: false` 返回 200 但 reasoning 纹丝不动，只有看 usage 里的 reasoning 长度才能发现。教训三：M3.1 的 reasoning_content 与 M2 的 <think> 内联是两种思考载体，前者用参数控制预算、后者用客户端剥离，两条路都要走。
+
+**Next:** 30-60s 技术样片：storyboard（首次实战 M2-2 校验/修复循环）→ 逐镜头生成。
+
+---
+
 ## 2026-09-29 — M3.1-Flash 实测不适合创作层 + 空产出防护（测试 156 例）
 
 **User Prompt:** "可以是用这个模型：MiniMax-M3.1-Flash-Preview 这是minimax最新的模型"。
+
+> ⚠️ **本条结论已被下一条修正**（当时只测到 max_tokens=8192 即断言不可用；实为预算不足）。有效部分：空产出防护是真 bug 修复，予以保留；"切回 M2.1" 的模型判断作废。
 
 **Done:** 实测评估 → 切回 M2.1，并修掉暴露出的真实 bug：
 - **M3.1 实测结论（长文本创作不可用）**：短/中请求正常（"君若见月过长河…"17 字符），但**一集剧本这种长文把整个 max_tokens 预算烧在 `reasoning_content` 上、正文返回 0 字符**——max_tokens=4096 → reasoning 15650 字符、8192 → 28725 字符，`finish_reason` 均为 `length`。该模型面向 agentic/工具调用（思考服务于行动），长篇创作是错配。config 保留实测结论注释，默认仍 M2.1。

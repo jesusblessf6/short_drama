@@ -40,6 +40,11 @@ class LLMConfig:
     temperature: float
     offline: bool = False
     price_per_1k_tokens: float = 0.0   # ¥/千token，用于 token→钱折算
+    # provider 特定请求参数（OpenAI SDK 的 extra_body）。
+    # 例：MiniMax M3.1 的 {"reasoning_effort": "low"}——该模型默认长篇思考会
+    # 吃掉整个 max_tokens 预算致正文为空；置 low 后推理极短（实测 335 字符），
+    # 总 token 与 M2.1 持平。不支持的 provider 留空即可。
+    extra_body: dict = field(default_factory=dict)
 
     @property
     def is_offline(self) -> bool:

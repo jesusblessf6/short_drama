@@ -70,6 +70,7 @@ class LLMClient:
             messages=messages,
             max_tokens=max_tokens or self.config.max_tokens,
             temperature=temperature if temperature is not None else self.config.temperature,
+            **({"extra_body": self.config.extra_body} if self.config.extra_body else {}),
         )
         self.last_usage = response.usage.total_tokens
         return strip_thinking(response.choices[0].message.content)

@@ -62,8 +62,48 @@ class TestConfigWithMinimaxLLM:
         assert cfg.llm.provider == "minimax"
         assert cfg.llm.base_url == "https://api.minimax.cn/v1"
         assert cfg.llm.max_tokens >= 4096     # M2 系列思考块占 token，max_tokens 不能太小
-        # M3.1-Flash-Preview 实测长文本创作会烧光 reasoning 预算返回空正文，不作创作层默认
-        assert cfg.llm.model == "MiniMax-M2.1"
+        # M3.1 需 reasoning_effort=low：默认超长推理会吃光 max_tokens 预算致正文为空
+        assert cfg.llm.model == "MiniMax-M3.1-Flash-Preview"
+        assert cfg.llm.extra_body.get("reasoning_effort") == "low"
+
+    def test_extra_body_passed_to_sdk(self, monkeypatch):
+        """provider 特定参数（extra_body）透传到 SDK 请求（不认识的参数会 422）"""
+        from drama.llm import LLMClient
+        cfg = LLMConfig(provider="minimax", base_url="https://api.minimax.cn/v1",
+                        api_key="k", model="MiniMax-M3.1-Flash-Preview",
+                        vision_model="m", max_tokens=8192, temperature=0.7,
+                        extra_body={"reasoning_effort": "low"})
+        client = LLMClient(cfg)
+        seen = {}
+
+        def fake_create(**kwargs):
+            seen.update(kwargs)
+            msg = type("M", (), {"content": "<think>思考</think>" + chr(10) + "正文"})()
+            return type("R", (), {"usage": type("U", (), {"total_tokens": 5})(),
+                                  "choices": [type("C", (), {"message": msg})()]})()
+
+        monkeypatch.setattr(client.client.chat.completions, "create", fake_create)
+        assert client.chat([{"role": "user", "content": "x"}]) == "正文"
+        assert seen["extra_body"] == {"reasoning_effort": "low"}
+
+    def test_no_extra_body_when_unset(self, monkeypatch):
+        """未配置时不传 extra_body（保持对其他 provider 的零影响）"""
+        from drama.llm import LLMClient
+        cfg = LLMConfig(provider="volcengine", base_url="https://example.invalid",
+                        api_key="k", model="glm", vision_model="v",
+                        max_tokens=1024, temperature=0.7)
+        client = LLMClient(cfg)
+        seen = {}
+
+        def fake_create(**kwargs):
+            seen.update(kwargs)
+            msg = type("M", (), {"content": "ok"})()
+            return type("R", (), {"usage": type("U", (), {"total_tokens": 1})(),
+                                  "choices": [type("C", (), {"message": msg})()]})()
+
+        monkeypatch.setattr(client.client.chat.completions, "create", fake_create)
+        client.chat([{"role": "user", "content": "x"}])
+        assert "extra_body" not in seen
 
 
 class TestEmptyOutputGuard:
