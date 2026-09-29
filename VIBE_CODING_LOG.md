@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-09-29 — 创意层切方舟 doubao-seed-2-1-pro（model id 探明 + 深度思考关闭）
+
+**User Prompt:** "那你再切火山方舟，文字创意部分使用seed pro 2.1 准确model id你找一下"。
+
+**Done:** 找到并实测确认准确 model id，接入（测试 158 例全绿）：
+- **model id = `doubao-seed-2-1-pro`**（上一代 `doubao-seed-2-0-pro` 也在用）。搜索工具本轮不可用且 docs.volcengine.com 是 SPA，改用 **API 探测**确定候选是否可用——比文档更权威，能同时验证"存在"和"你这把 key 有权限"。
+- **plan 端点支持 chat**：`…/api/plan/v3/chat/completions` 可用（原先只在视觉模型 PDF 里见过 plan 端点，文本能否用属新事实）。因此创意层与视觉生成**共用 Agent Plan 同一把 key**，无需另配 coding key。
+- **关键参数 `extra_body.thinking: {type: disabled}`**：Seed 2.1 默认深度思考，实测 reasoning 1375 字符 / 9018 token / **151s**；关掉后 **3 场景 / 4267 token / 30s**，预算全部留给正文。
+- **产出质量**：含【镜头】运镜描述（"镜头从院内的暖光，缓缓摇向紧闭的黑漆大门"）与**「角色：台词」前缀格式**——后者正好匹配 storyboard 的 `_read_script_dialogues` 提取正则，下游零适配。
+- **四模型同负载横向对比**（本轮累计）：seed-2-1-pro 1271字符/3场/4267token/30s **（当前采用）**；MiniMax-M3 1650/3场/11306/51s（质量相当，成本 2.6 倍）；M3.1-Flash 1446/2场/4325/18s（骨架级，无镜头描述）；M2.5 1197/2场/4288/18s。
+- 端到端验证：ep01 剧本 4984 字节 / 4655 token / ¥0.05。
+
+**Why:** 推理类模型的**思考预算必须显式关掉**才有可用产出——这已是本项目第二次踩同一类坑（M3.1 烧光预算、M3 正常、Seed 2.1 慢 5 倍）。规律：**推理模型 + 长文创作 = 必须约束思考**，无论哪家。本次把开关做成 `LLMConfig.extra_body` 的通用能力（`thinking.disabled` / `reasoning_effort: low` 两种方言都走同一通道），下家模型接入时只改配置不改代码。
+
+**Next:** storyboard（首次实战 M2-2 校验/修复循环；其台词提取将直接受益于本轮的「角色：台词」格式）→ 30-60s 技术样片。
+
+---
+
 ## 2026-09-29 — 创意层模型选型：实测对比后选定 MiniMax-M3（测试 158 例）
 
 **User Prompt:** "文字创意环节用比较好的文本模型吧，比如minimax就用他们新出的m3.1，你可以搜一下准确的model id"。
