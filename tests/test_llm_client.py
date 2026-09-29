@@ -54,13 +54,13 @@ class TestStripThinking:
         assert client.last_usage == 9
 
 
-class TestConfigWithMinimaxLLM:
+class TestCreativeLayerConfig:
     def test_real_llm_mode_active(self, tmp_path):
         """配置了 key → is_offline False（创意层走真实 LLM 而非离线模板）"""
         from drama.config import Config
         cfg = Config.from_yaml("/Users/wing/mySpace/short_drama/config.yaml")
-        assert cfg.llm.provider == "minimax"
-        assert cfg.llm.base_url == "https://api.minimax.cn/v1"
+        assert cfg.llm.provider == "volcengine"
+        assert "/api/plan/v3" in cfg.llm.base_url
         assert cfg.llm.max_tokens >= 4096     # M2 系列思考块占 token，max_tokens 不能太小
         # 创意层接方舟 doubao-seed-2-1-pro：须关深度思考，否则 token 预算被 reasoning 吃掉
         assert cfg.llm.model == "doubao-seed-2-1-pro"
