@@ -36,21 +36,21 @@ judgment:
   redline_gate: log_only
 
 llm:
-  # 创意层接 MiniMax M3.1-Flash-Preview（OpenAI 兼容端点 /v1/chat/completions，token plan 计费）。
-  # **extra_body.reasoning_effort: low 是关键**：该模型默认对长文做超长推理
-  # （实测 reasoning_content 达 3.4w-5w 字符），会吃光 max_tokens 预算致正文返回空；
-  # 置 low 后推理仅数百字符，总 token（4558）与 M2.1（4090）持平。
-  # 切回 M2 系列：model MiniMax-M2.1 并删掉 extra_body（M2 走 <think> 内联块，
-  # 由 LLMClient.strip_thinking 清理）。切回火山：base_url 换 coding/v3 + ARK_CODING_API_KEY。
+  # 创意层接 MiniMax（OpenAI 兼容端点 /v1/chat/completions，token plan 计费）。
+  # 本 key 实测可用的文本模型：MiniMax-M3.1-Flash-Preview（仅 Preview 变体，无正式版）、
+  #   MiniMax-M3、MiniMax-M2.5、MiniMax-M2.1、MiniMax-M2。
+  # **选 M3 而非 M3.1-Flash**：同 writer 负载实测 M3 产出带【画面】【定格】【字幕浮现】
+  #   的镜头化描述 + 情感节点 + 集尾钩子（Flash 仅骨架），下游分镜直接受益；
+  #   代价是 11306 token/51s vs 4325/18s（约 +¥0.07/集，视频生成占比可忽略）。
+  # 切回 Flash：model MiniMax-M3.1-Flash-Preview（+ reasoning_effort: low）。
+  # 切回火山：base_url 换 coding/v3 + api_key ${ARK_CODING_API_KEY} + model glm-latest。
   provider: minimax
   base_url: "https://api.minimax.cn/v1"
   api_key: "${MINIMAX_API_KEY}"
-  model: "MiniMax-M3.1-Flash-Preview"
+  model: "MiniMax-M3"
   vision_model: "MiniMax-M3.1-Flash-Preview"   # 真实模式画面质检用；离线时 QA 短路不调用
-  max_tokens: 8192                    # reasoning_effort=low 后无需超大预算
+  max_tokens: 8192
   temperature: 0.7
-  extra_body:
-    reasoning_effort: low
   offline: false        # true 或 api_key 为空时，创意层走离线模板（零外部 key 可跑）
   price_per_1k_tokens: 0.01   # ¥/千token 折算估算（token plan 套餐内扣减；账单核对后校准）
 

@@ -62,9 +62,11 @@ class TestConfigWithMinimaxLLM:
         assert cfg.llm.provider == "minimax"
         assert cfg.llm.base_url == "https://api.minimax.cn/v1"
         assert cfg.llm.max_tokens >= 4096     # M2 系列思考块占 token，max_tokens 不能太小
-        # M3.1 需 reasoning_effort=low：默认超长推理会吃光 max_tokens 预算致正文为空
-        assert cfg.llm.model == "MiniMax-M3.1-Flash-Preview"
-        assert cfg.llm.extra_body.get("reasoning_effort") == "low"
+        # 创意层用 M3 完整版（镜头化产出优于 Flash；成本差约 +¥0.07/集）
+        assert cfg.llm.model == "MiniMax-M3"
+        # 切回 M3.1-Flash-Preview 时必须配 reasoning_effort=low（默认推理会吃光预算）
+        if "M3.1" in cfg.llm.model:
+            assert cfg.llm.extra_body.get("reasoning_effort") == "low"
 
     def test_extra_body_passed_to_sdk(self, monkeypatch):
         """provider 特定参数（extra_body）透传到 SDK 请求（不认识的参数会 422）"""
