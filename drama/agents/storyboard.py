@@ -13,6 +13,17 @@ from .validation import character_names, repair_shots, validate_shots
 logger = logging.getLogger(__name__)
 
 
+def _clean_line(text: str) -> str:
+    """台词清洗：剥离表演提示（（叩板）/（轻声））、引号与舞台说明。
+
+    台词要进 TTS 与字幕——「（叩板）"原来姹紫嫣红开遍"」必须只剩可朗读的正文。
+    """
+    t = re.sub(r"[（(][^）)]*[）)]", "", text or "")   # 表演提示
+    t = t.strip().strip("\"'“”「」『』")                  # 引号
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 class StoryboardAgent(BaseAgent):
     system_prompt_file = "storyboard.md"
 
@@ -143,7 +154,23 @@ class StoryboardAgent(BaseAgent):
         }
 
     def _parse_shots(self, response: str, episode: str) -> list[dict]:
-        """从分镜 markdown 的「### 镜头NN」详情段解析结构化镜头"""
+        """从分镜 markdown 解析结构化镜头。
+
+        两种形态（真实 LLM 会在两者间漂移，解析器必须都认）：
+        1. `### 镜头NN` 块格式（prompt 要求的规范格式）
+        2. markdown 表格（模型自行改用时）——从表格行解析，台词/备注列兜底取台词
+        """
+        shots = self._parse_shot_blocks(response, episode)
+        if shots:
+            return shots
+        table = self._parse_shot_table(response, episode)
+        if table:
+            logger.warning("分镜为表格格式（非规范块格式），已按表格解析 %d 个镜头",
+                           len(table))
+        return table
+
+    def _parse_shot_blocks(self, response: str, episode: str) -> list[dict]:
+        """规范形态：`### 镜头NN` 详情块"""
         blocks = re.split(r"###\s*镜头\s*\d+", response)[1:]  # 丢掉首段（表格/标题）
         shots = []
         for i, block in enumerate(blocks, start=1):
@@ -169,20 +196,99 @@ class StoryboardAgent(BaseAgent):
                 "negative_prompt": neg,
                 "dialogue": dialogue,
                 "speaker": speaker,
-                "duration": 4,
+                "duration": self._parse_duration(field("时长")),
             })
         return shots
 
+    # 表格列名 → 语义（模型可能用各种叫法，按包含关系匹配）
+    _TABLE_COLS = {
+        "shot": ("镜头", "序号"),
+        "scene": ("场景",),
+        "t2i": ("文生图", "t2i"),
+        "i2v": ("图生视频", "i2v"),
+        "dialogue": ("台词", "备注", "对白"),
+    }
+
+    def _parse_shot_table(self, response: str, episode: str) -> list[dict]:
+        """兜底形态：markdown 表格。台词在独立列或与备注混在一格，都尝试取。"""
+        lines = [ln for ln in response.splitlines() if ln.strip().startswith("|")]
+        if len(lines) < 2:
+            return []
+        header = [c.strip() for c in lines[0].strip().strip("|").split("|")]
+        idx: dict[str, int] = {}
+        for key, names in self._TABLE_COLS.items():
+            for i, h in enumerate(header):
+                if any(n in h for n in names):
+                    idx.setdefault(key, i)
+                    break
+        if "t2i" not in idx or "i2v" not in idx:
+            return []   # 不是分镜表
+        shots = []
+        for row in lines[1:]:
+            cells = [c.strip() for c in row.strip().strip("|").split("|")]
+            if len(cells) <= idx["t2i"]:
+                continue
+            t2i, i2v = cells[idx["t2i"]], cells[idx["i2v"]]
+            if not t2i and not i2v:
+                continue
+            if set("".join(cells)) <= set("-: "):   # 表格分隔行（---|---）
+                continue
+            dlg_cell = cells[idx["dialogue"]] if "dialogue" in idx and idx["dialogue"] < len(cells) else ""
+            speaker, dialogue = self._split_table_dialogue(dlg_cell)
+            i = len(shots) + 1
+            shots.append({
+                "id": f"{episode}_shot{i:02d}",
+                "scene": cells[idx["scene"]] if "scene" in idx and idx["scene"] < len(cells) else "场景",
+                "type": self._infer_type(i2v, ""),
+                "t2i_prompt": t2i,
+                "i2v_prompt": i2v,
+                "negative_prompt": self.NEGATIVE_DEFAULT,
+                "dialogue": dialogue,
+                "speaker": speaker,
+                "duration": 5,
+            })
+        return shots
+
+    def _split_table_dialogue(self, cell: str) -> tuple[str, str]:
+        """表格台词格：必须严格是「角色名：台词内容」才算台词。
+
+        模型常把台词与拍摄备注混在同一列（"磨石霍霍有声"是音效备注、"商士禹台词镜头"
+        是说明），故要求有「角色：」前缀且内容非空——否则视为备注，不进配音/字幕。
+        多角色用 ／ 分隔时取第一位。
+        """
+        text = (cell or "").strip()
+        if not text or any(k in text for k in ("无台词", "无对白", "音效：", "环境音")):
+            return "旁白", ""
+        first = re.split(r"[／/]", text)[0].strip()
+        m = re.match(r"^([^（()：:]{1,8})[：:]\s*(.+)$", first)
+        if not m:
+            return "旁白", ""          # 无「角色：」前缀 → 备注，不算台词
+        speaker, content = m.group(1).strip(), m.group(2).strip()
+        content = re.sub(r"^[（(][^）)]*[）)]\s*", "", content).strip("\"'“”「」")
+        return (speaker, content) if content else ("旁白", "")
+
+    @staticmethod
+    def _parse_duration(text: str) -> int:
+        """「6秒」/「6s」→ 6；解析不出回 4（后续 repair_shots 会钳制）"""
+        m = re.search(r"(\d+)", text or "")
+        if m:
+            return int(m.group(1))
+        return 4
+
     @staticmethod
     def _split_speaker(text: str) -> tuple[str, str]:
-        """把「说话人：台词」切成 (speaker, text);无说话人则归旁白"""
+        """把「说话人：台词」切成 (speaker, text);无说话人则归旁白。
+
+        占位词（无台词/无对白/音效：…）一律视为空——否则会把"无台词"三个字
+        送进配音与字幕（真实踩过）。
+        """
         t = (text or "").strip()
-        if not t:
+        if not t or any(k in t for k in ("无台词", "无对白", "音效：", "环境音")):
             return "旁白", ""
         m = re.match(r"^([^（）：:]{1,8})[：:](.+)$", t)
         if m:
-            return m.group(1).strip(), m.group(2).strip()
-        return "旁白", t
+            return m.group(1).strip(), _clean_line(m.group(2))
+        return "旁白", _clean_line(t)
 
     @staticmethod
     def _infer_type(i2v_prompt: str, jingbie: str) -> str:

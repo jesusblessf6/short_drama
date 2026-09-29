@@ -1,10 +1,10 @@
 breakdown:
-  writer:
-    llm_tokens: 4760
-    llm_cost_cny: 0.0476
+  storyboard:
+    llm_tokens: 28204
+    llm_cost_cny: 0.28204
     api_calls: 0
     api_cost_cny: 0.0
-total_llm_tokens: 4760
+total_llm_tokens: 28204
 total_api_calls: 0
-total_cny: 0.05
-generated_at: '2026-09-29T23:25:46.530716'
+total_cny: 0.28
+generated_at: '2026-09-29T23:48:36.229847'

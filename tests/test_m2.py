@@ -25,7 +25,7 @@ from drama.utils.media_check import (
 )
 from drama.utils.subtitles import build_srt, format_srt_time
 
-from conftest import make_orchestrator
+from conftest import REPO_ROOT, make_orchestrator
 
 
 # ---------- M2-2: 结构化校验与修复 ----------
@@ -59,6 +59,51 @@ class TestShotValidation:
         fatal, warns = validate_shots(shots, characters={"主角"})
         assert not fatal
         assert any("路人甲" in w for w in warns)          # 未知角色 → warning 不阻断
+
+    def test_table_dialogue_extraction_rules(self):
+        """表格台词列：只有「角色：内容」算台词；备注/音效/分隔行不算"""
+        from drama.config import Config
+        from drama.agents.storyboard import StoryboardAgent
+        agent = StoryboardAgent(Config.from_yaml(REPO_ROOT / "config.yaml"))
+        table = (
+            "| 镜头号 | 场景 | 文生图Prompt | 图生视频Prompt | 备注 |\n"
+            "|---|---|---|---|---|\n"
+            "| 01 | 庭院 | 中景古风 | 固定镜头 | 开场定调，毁容 |\n"
+            "| 02 | 廊下 | 中景古风 | 固定镜头 | 磨石霍霍有声 |\n"
+            "| 03 | 石桌 | 近景古风 | 缓慢推近 | 商三官：（轻声）娘定就好 |\n"
+            "| 04 | 院门 | 特写古风 | 固定 | 无台词 |\n"
+            "| 05 | 院心 | 特写古风 | 固定 | 音效：弦断嘣，无台词 |\n"
+        )
+        shots = agent._parse_shots(table, "ep01")
+        assert len(shots) == 5, "分隔行不得被当成镜头"
+        assert [s["speaker"] for s in shots] == [
+            "旁白", "旁白", "商三官", "旁白", "旁白"]
+        assert shots[0]["dialogue"] == "" and shots[1]["dialogue"] == "", "备注非台词"
+        assert shots[2]["dialogue"] == "娘定就好", "表演提示与引号应剥离"
+        assert shots[3]["dialogue"] == "" and shots[4]["dialogue"] == ""
+
+    def test_block_format_preferred_and_prompt_forbids_table(self):
+        """prompt 明确要求块格式并禁止表格（表格只作开头总览）"""
+        from drama.agents.base import PROMPTS_DIR
+        sb = (PROMPTS_DIR / "storyboard.md").read_text(encoding="utf-8")
+        assert "### 镜头NN" in sb and "禁止用 markdown 表格" in sb
+
+    def test_storyboard_prompt_requires_dialogue(self):
+        """分镜 prompt 必须要求台词字段——配音/字幕/对齐全依赖它（真实踩过：漏写致全片无声）"""
+        from drama.agents.base import PROMPTS_DIR
+        sb = (PROMPTS_DIR / "storyboard.md").read_text(encoding="utf-8")
+        assert "- 台词：" in sb, "分镜 prompt 必须给出台词字段格式"
+        assert "无台词" in sb, "须说明无对白镜头的写法"
+        # 契约须与解析器一致：storyboard._parse_shots 按「角色名：内容」切分
+        from drama.agents.storyboard import StoryboardAgent
+        speaker, text = StoryboardAgent._split_speaker("商三官：女儿一定为您讨回公道")
+        assert speaker == "商三官" and text == "女儿一定为您讨回公道"
+        # 表演提示与引号必须剥离——台词要进 TTS/字幕，不能朗读「（叩板）"…"」
+        sp, tx = StoryboardAgent._split_speaker('商士禹：（叩板）"原来姹紫嫣红开遍——"')
+        assert sp == "商士禹" and tx == "原来姹紫嫣红开遍——"
+        # 占位词不得进配音/字幕（真实踩过："无台词"三字被当台词送进 TTS）
+        for placeholder in ("无台词", "无对白", "音效：弦断嘣", "环境音：远处丝竹", ""):
+            assert StoryboardAgent._split_speaker(placeholder) == ("旁白", "")
 
     def test_red_lines_present_in_prompts(self):
         """内容红线写进 writer/director prompt（M2-2 合规前置，防回归删除）"""
