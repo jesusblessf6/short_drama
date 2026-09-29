@@ -36,7 +36,9 @@ judgment:
   redline_gate: log_only
 
 llm:
-  # 创意层接火山方舟 Doubao Seed Pro 2.1（model id: doubao-seed-2-1-pro，本 key 实测可用；
+  # 创意层接火山方舟 Doubao Seed Pro 2.1（model id: doubao-seed-2.1-pro，本 key 实测可用；
+  # 端点内部解析为 doubao-seed-2-1-pro-260915：点号是官方简称，短横线+日期为底层模型名，
+  # 两者等价——写哪个都能调通，此处用官方简称）；
   # plan 端点 chat 可用，key 为 Agent Plan 专属 AGENT_API_KEY，与视觉生成同一账号）。
   # **extra_body.thinking.disabled 是关键**：Seed 2.1 默认深度思考，实测 reasoning
   # 1375 字符/9018 token/151s；关掉后 3 场景/4267 token/30s，产出含【镜头】运镜描述
@@ -48,8 +50,8 @@ llm:
   provider: volcengine
   base_url: "https://ark.cn-beijing.volces.com/api/plan/v3"
   api_key: "${AGENT_API_KEY}"
-  model: "doubao-seed-2-1-pro"
-  vision_model: "doubao-seed-2-1-pro"   # Seed 系列多模态，画面质检同模型
+  model: "doubao-seed-2.1-pro"
+  vision_model: "doubao-seed-2.1-pro"   # Seed 系列多模态，画面质检同模型
   max_tokens: 8192
   temperature: 0.7
   extra_body:

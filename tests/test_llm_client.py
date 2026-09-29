@@ -63,7 +63,7 @@ class TestCreativeLayerConfig:
         assert "/api/plan/v3" in cfg.llm.base_url
         assert cfg.llm.max_tokens >= 4096     # M2 系列思考块占 token，max_tokens 不能太小
         # 创意层接方舟 doubao-seed-2-1-pro：须关深度思考，否则 token 预算被 reasoning 吃掉
-        assert cfg.llm.model == "doubao-seed-2-1-pro"
+        assert cfg.llm.model == "doubao-seed-2.1-pro"
         assert cfg.llm.extra_body.get("thinking", {}).get("type") == "disabled"
 
     def test_extra_body_passed_to_sdk(self, monkeypatch):

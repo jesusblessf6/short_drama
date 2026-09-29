@@ -11,7 +11,7 @@
 **User Prompt:** "那你再切火山方舟，文字创意部分使用seed pro 2.1 准确model id你找一下"。
 
 **Done:** 找到并实测确认准确 model id，接入（测试 158 例全绿）：
-- **model id = `doubao-seed-2-1-pro`**（上一代 `doubao-seed-2-0-pro` 也在用）。搜索工具本轮不可用且 docs.volcengine.com 是 SPA，改用 **API 探测**确定候选是否可用——比文档更权威，能同时验证"存在"和"你这把 key 有权限"。
+- **model id = `doubao-seed-2.1-pro`**（用户提供的官方简称；端点内部解析为 `doubao-seed-2-1-pro-260915`——短横线+日期为底层模型名，两者等价；上一代 `doubao-seed-2.0-pro` 同样可用）。搜索工具本轮不可用且 docs.volcengine.com 是 SPA，改用 **API 探测**确定候选是否可用——比文档更权威，能同时验证"存在"和"你这把 key 有权限"。
 - **plan 端点支持 chat**：`…/api/plan/v3/chat/completions` 可用（原先只在视觉模型 PDF 里见过 plan 端点，文本能否用属新事实）。因此创意层与视觉生成**共用 Agent Plan 同一把 key**，无需另配 coding key。
 - **关键参数 `extra_body.thinking: {type: disabled}`**：Seed 2.1 默认深度思考，实测 reasoning 1375 字符 / 9018 token / **151s**；关掉后 **3 场景 / 4267 token / 30s**，预算全部留给正文。
 - **产出质量**：含【镜头】运镜描述（"镜头从院内的暖光，缓缓摇向紧闭的黑漆大门"）与**「角色：台词」前缀格式**——后者正好匹配 storyboard 的 `_read_script_dialogues` 提取正则，下游零适配。
